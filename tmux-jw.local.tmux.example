@@ -1,0 +1,12 @@
+# tmux-jw.local.tmux.example — optional local tmux overrides.
+#
+# Setup:   cp tmux-jw.local.tmux.example tmux-jw.local.tmux   # then edit
+# The real tmux-jw.local.tmux is git-ignored. tmux.conf source-files it as its
+# LAST line (if present), so anything you set here wins over the committed
+# config — change the prefix, retune options, add bindings, without forking
+# tmux.conf. Plain tmux syntax.
+
+# Example: use a different prefix than the repo's C-k
+#set -g prefix C-a
+#unbind C-k
+#bind C-a send-prefix

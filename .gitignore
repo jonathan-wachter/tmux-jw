@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# editor/OS/tool cruft
+*.swp
+*~
+.ruff_cache/
+
+# stormfix restore backups (kept on disk, not tracked)
+*.bak-stormfix-*
+
+# local configuration — copy the .example templates, never commit the real ones
+tmux-jw.config
+tmux-jw.local.tmux
+
+# local working docs
+PLAN-scrub-and-config.md

@@ -1,0 +1,29 @@
+{
+  "_comment": "Merge these entries into the \"hooks\" block of ~/.claude/settings.json. settings.json must be valid JSON, so remove this _comment line. Each entry calls tmux-claude-state.sh with the state to display for that Claude Code lifecycle event.",
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "~/.config/tmux-jw/hooks/tmux-claude-state.sh working", "async": true } ] }
+    ],
+    "PostToolUse": [
+      { "hooks": [ { "type": "command", "command": "~/.config/tmux-jw/hooks/tmux-claude-state.sh working", "async": true } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "AskUserQuestion", "hooks": [ { "type": "command", "command": "~/.config/tmux-jw/hooks/tmux-claude-state.sh question", "async": true } ] }
+    ],
+    "Notification": [
+      { "hooks": [ { "type": "command", "command": "~/.config/tmux-jw/hooks/tmux-claude-state.sh needs_you", "async": true } ] }
+    ],
+    "StopFailure": [
+      { "hooks": [ { "type": "command", "command": "~/.config/tmux-jw/hooks/tmux-claude-state.sh needs_you", "async": true } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "~/.config/tmux-jw/hooks/tmux-claude-state.sh done", "async": true } ] }
+    ],
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "~/.config/tmux-jw/hooks/tmux-claude-state.sh clear", "async": true } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "~/.config/tmux-jw/hooks/tmux-claude-state.sh clear", "async": true } ] }
+    ]
+  }
+}
