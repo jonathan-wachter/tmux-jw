@@ -81,7 +81,7 @@ actions=$({
   printf '%s\n' "$panes"    | sed 's/^/P|/'
   printf '%s\n' "$pstree"   | sed 's/^/T|/'
   printf '%s'   "$sessions" | sed 's/^/S|/'
-} | awk -F'|' -v now="$(date +%s)" -v stall="$STALL_SECS" '
+} | awk -F'|' -v now="$(date +%s)" -v stall="$STALL_SECS" -v host="$(hostname)" -v hostshort="$(hostname -s)" '
 $1 == "P" && $2 != "" {
   pane_by_pid[$3] = $2          # shell pid → pane id
   state[$2] = $4                # current @ccstate
@@ -140,6 +140,11 @@ END {
     # dashboard wraps, so clipping belongs to each consumer). 60 = sanity cap.
     # NB: this comment lives INSIDE a single-quoted awk string — no apostrophes!
     dn = ptitle[pane]; sub(/^[^a-zA-Z0-9]+/, "", dn); dn = substr(dn, 1, 60)
+    # HOSTNAME = NO TITLE (2026-07-16): tmux defaults pane_title to #{host},
+    # so a pane whose program never sets a title (e.g. the email-triage TUI)
+    # would publish the HOSTNAME as its @ccname and hijack the tab away from
+    # the real window_name. Treat the default as empty.
+    if (dn == host || dn == hostshort) dn = ""
     if (dn != name[pane]) print pane "|name|" (dn == "" ? "clear" : dn)
 
     # BG-BUSY BY NAME (2026-07-09): an unmappable busy bg session whose
