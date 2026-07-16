@@ -5,13 +5,18 @@
 # per device and passes the invoking client's context). v2 upgrades the v1
 # single-session switcher into a cross-session cockpit:
 #
-#   HEADER  session tabs — every CLAUDE-ACTIVE tmux session as a `❯ name ❮`
+#   HEADER  (2026-07-16) three zones: a `[ ➕ NEW ]` button in its own
+#           │-separated section at the LEFT (tap or ⏎ on it → new window in the
+#           VIEWED session — replaces the old "+ new window" bottom row), then
+#           the session tabs — every CLAUDE-ACTIVE tmux session as a `❯ name ❮`
 #           capsule (2026-07-08: sessions with no live Claude CLI and no
 #           @ccstate/@ccname are hidden; the viewed/origin session always
 #           shows), the VIEWED one inverted (BLUE when the bar itself has
-#           focus). Reach the bar by pressing ↑ off row 1; there ←/→ (or h/l,
-#           or tap a tab) browse another session's windows WITHOUT switching,
-#           and ↓ drops back to row 1.
+#           focus) — and a `[ ❌ CLOSE ]` button at the top right (closes the
+#           popup; replaces the old `[ X ]`). Reach the bar by pressing ↑ off
+#           row 1; there ←/→ (or h/l, or tap) cycle NEW + the tabs — browsing
+#           another session's windows WITHOUT switching — and ↓ drops back to
+#           row 1.
 #   BODY    (2026-07-08 redesign; restyled v3.1) one entry per window. The window
 #           number, name, and status glyph are FLUSH-LEFT on the entry's divider
 #           line (no ├─┤ T-bar frame), a dash rule running to the edge; the
@@ -49,8 +54,10 @@
 #                       are a prefix of a 2-digit index (e.g. "1" when 10-19 exist)
 #                       wait for a 2nd digit; use 01-09 to disambiguate.
 #   • space / f / b   → cursor to last / last / first window (list focus only)
-#   • click           → header tab = view that session · row = open that window ·
-#                       [ X ] = close · wheel = scroll  (tap-to-park is v1-deferred)
+#   • click           → header [ ➕ NEW ] = new window in the viewed session ·
+#                       header tab = view that session · row = open that window ·
+#                       [ ❌ CLOSE ] = close · wheel = scroll  (tap-to-park is
+#                       v1-deferred)
 #   • q or Esc        → close.  Unknown keys are no-ops (v1 closed on any key).
 #
 # Testability (added 2026-07-02): set JW_DASH_TEST=1 to run headless — geometry
@@ -108,6 +115,7 @@ CLIENT=${3:-}
 # ↑ off row 1 lifts focus to the bar; there ←/→ switch session and ↓ returns to
 # row 1. The heavy lifting (moves) is the shared hook — see decision 1A.
 FOCUS=body        # body | tabs
+BARNEW=0          # 1 = the bar cursor sits on the [ ➕ NEW ] button (FOCUS=tabs)
 ACTION=0          # chip index (see map above)
 CONFIRM=0         # 1 = close armed and awaiting the confirming Enter
 TOAST=""          # transient footer message after an action (cleared on next key)
@@ -127,7 +135,6 @@ __cfg="${BASH_SOURCE[0]%/*}/../tmux-jw.config"
 PARKING_NAME=${JW_DASH_PARKING:-${TMUXJW_PARKING:-cc-parking}}
 HOOK="${BASH_SOURCE[0]%/*}/tmux-window-park.sh"
 TELEPORT="${BASH_SOURCE[0]%/*}/tmux-window-teleport.sh"   # the "move to slot" engine (prefix+.)
-NEWWIN_SENTINEL="+newwin"   # win_order value of the synthetic "＋ new window" row (R2)
 # ── global search state (R3, 2026-07-08): `.` opens a cross-session type-ahead.
 # SEARCH_ON=1 makes build_model list windows from ALL Claude-active sessions that
 # match SEARCH_Q (space-separated words, any-subset OR match, relevance-ranked),
@@ -140,12 +147,17 @@ SEARCH_Q=""
 # ── tmux-help state (2026-07-09): `?` opens a full-screen reference of the tmux
 # prefix (C-k) key bindings, generated live from `tmux list-keys -N -T prefix`
 # so it always reflects the real bindings. Rendered in TWO columns; a type-ahead
-# query filters by key OR description; ↑↓/wheel scroll; Esc closes back to the
-# list. HELP_M* = master arrays (loaded once); HELP_D*/HELP_N = current filtered
-# view; HELP_OFF = scroll row; HELP_MAXK = key-column width for alignment.
+# query filters by key OR description; Esc closes back to the list. 2026-07-16:
+# the reference is RUNNABLE — ↑↓←→ (or a tap) move a selection over the grid
+# (↑↓ = same column, ←→ = adjacent entry) and ⏎ replays `prefix + key` at the
+# invoking client (send-keys -K) right after the popup closes, so the chosen
+# binding runs exactly as if typed. HELP_M* = master arrays (loaded once);
+# HELP_D*/HELP_N = current filtered view; HELP_SEL = selected entry index;
+# HELP_OFF = scroll row; HELP_MAXK = key-column width for alignment.
 HELP_ON=0
 HELP_Q=""
 HELP_OFF=0
+HELP_SEL=0
 HELP_LOADED=0
 HELP_MAXK=0
 HELP_N=0
@@ -340,11 +352,8 @@ build_model() {
   done <<EOF
 $sorted
 EOF
-  # R2: a synthetic "＋ new window" row at the bottom (normal view only) —
-  # selecting/clicking it creates a window in this session.
-  win_order[ordn]="$NEWWIN_SENTINEL"; win_sess[ordn]="$VSESS"; whead[ordn]=${#line_win[@]}
-  add_line "$NEWWIN_SENTINEL" h "+ new window" "" "" "$VSESS"
-  ordn=$((ordn+1))
+  # (2026-07-16: the synthetic "+ new window" bottom row is gone — new-window
+  # now lives in the header's [ ➕ NEW ] button.)
   nwin=$ordn
   total=${#line_win[@]}
 }
@@ -449,20 +458,33 @@ jump_win() {
 # (❯/❮ = U+276F/U+276E: single-cell-width everywhere, unlike 〉〈 U+3009/3008
 #  which are East-Asian-Wide → 2 cells and font-ambiguous over mosh)
 tab_lo=(); tab_hi=(); tab_of=()   # column span of each RENDERED tab → session index
-hdr_out=""; hdr_bound=0           # column of the zone's right edge │ (0 = none)
+hdr_out=""; hdr_bound=0           # column of the TAB zone's right edge │ (0 = none)
+hdr_bound0=0                      # column of the NEW zone's right edge │ (0 = none)
+new_lo=0; new_hi=0                # click span of the [ ➕ NEW ] button
 # Session-tab zone shading: flattened to the popup fill (ported scheme has no
 # distinct tab band) — the tabs read as their own region via the │ emitted below,
 # the header rule's ┴ junction at hdr_bound, and the popup's own border.
 SHADE=$'\033[48;2;181;188;200m'
 build_header() {
   tab_lo=(); tab_hi=(); tab_of=(); hdr_out=""; hdr_bound=0
-  local budget=$(( cols - 7 ))    # keep the top-right [ X ] zone clear
-  local i lab lw col=2 start=0 sv plain="" styled="${SHADE} "
+  local budget=$(( cols - 14 ))   # keep the top-right [ ❌ CLOSE ] zone clear (12 cells + margin)
+  local i lab lw col start=0 sv plain="" styled="${SHADE} "
   sview; sv=$__sv
+
+  # [ ➕ NEW ] button (2026-07-16): its own │-separated zone at the LEFT of the
+  # bar, before the tabs — tap or ⏎ (when the bar cursor is on it) creates a
+  # window in the VIEWED session. TABFOC fill marks the bar cursor; fixed
+  # geometry: label = 9 chars / 10 cells (➕ is 2 cells), cols 2-11, │ at 13.
+  local nst="$BOLD"
+  [ "$FOCUS" = tabs ] && [ "$BARNEW" = 1 ] && nst="${TABFOC}${BOLD}"
+  styled="${styled}${nst}[ ➕ NEW ]${RESET}${SHADE} ${RESET}${SLATE}│${RESET}${SHADE} "
+  new_lo=2; new_hi=11
+  hdr_bound0=13
+  col=15                          # first tab column (after "│ ")
 
   # choose the first rendered tab so the VIEWED one always fits inside budget
   while :; do
-    local used=2 fits=0 j
+    local used=$col fits=0 j
     for (( j=start; j<nsess; j++ )); do
       lab="❯ ${SESS_LIST[j]} ❮"; lw=$(( ${#lab} + 2 ))
       used=$(( used + lw ))
@@ -486,8 +508,9 @@ build_header() {
     # ${SHADE} before the closing ❮ (and it carries through to the separator).
     local inner=" ${SESS_LIST[i]} " tst
     if [ "$i" = "$sv" ]; then
-      # viewed tab: blue when the BAR itself has focus, plain reverse otherwise
-      if [ "$FOCUS" = tabs ]; then tst="${TABFOC}${BOLD}"
+      # viewed tab: blue when the BAR itself has focus (and the bar cursor is
+      # not parked on [ ➕ NEW ]), plain reverse otherwise
+      if [ "$FOCUS" = tabs ] && [ "$BARNEW" = 0 ]; then tst="${TABFOC}${BOLD}"
       else                        tst="${REV}${BOLD}"; fi
     else                          tst="${BOLD}"; fi
     styled="${styled}❯${tst}${inner}${RESET}${SHADE}❮"
@@ -500,11 +523,21 @@ build_header() {
   styled="${styled} ${RESET}${SLATE}│${RESET}"
   hdr_bound=$(( col + 1 ))
   # short hints in the leftover header room (full set lives in the footer);
-  # focus-dependent so the bar tells you what ←/→ does right now
-  local hint
-  if [ "$FOCUS" = tabs ]; then hint=' ←→ session · ↓ list · ⇥ commit · Esc/q'
-  else                         hint=' ↑↓ move · ←→ controls · ⇥ session · ⏎ · Esc/q'; fi
-  if [ $(( hdr_bound + ${#hint} )) -le "$budget" ]; then styled="${styled}${MUTED}${hint}${RESET}"; fi
+  # focus-dependent so the bar tells you what ←/→ does right now. 2026-07-16:
+  # fitted SEGMENT-WISE (drop trailing ` · seg` pieces that overflow) — the NEW
+  # zone + wider [ ❌ CLOSE ] leave less room, and a partial hint beats none.
+  local segs rest seg cand hint=""
+  if [ "$FOCUS" = tabs ]; then segs='←→ session|↓ list|⇥ commit|Esc/q'
+  else                         segs='↑↓ move|←→ controls|⇥ session|⏎|Esc/q'; fi
+  rest=$segs
+  while [ -n "$rest" ]; do
+    seg=${rest%%|*}
+    case "$rest" in *'|'*) rest=${rest#*|};; *) rest="";; esac
+    if [ -z "$hint" ]; then cand=" $seg"; else cand="$hint · $seg"; fi
+    [ $(( hdr_bound + ${#cand} )) -le "$budget" ] || break
+    hint=$cand
+  done
+  [ -n "$hint" ] && styled="${styled}${MUTED}${hint}${RESET}"
   hdr_out=$styled
 }
 
@@ -531,15 +564,6 @@ draw_entry_rule() {
   # line), NOT by window-index value — indices collide across sessions in global
   # search, so a value compare would light up every "window 1" at once.
   [ "$FOCUS" = body ] && [ "$j" = "${whead[sel]}" ] && sel_here=1
-  # R2: the synthetic "+ new window" action row — flush-left, no chips, no glyph,
-  # no • marker; reverse-highlighted when it's the cursor row.
-  if [ "$w" = "$NEWWIN_SENTINEL" ]; then
-    fillw=$(( cols - ${#title} - 1 )); [ "$fillw" -lt 0 ] && fillw=0
-    printf -v fill '%*s' "$fillw" ''; fill=${fill// /─}
-    if [ "$sel_here" = 1 ]; then printf '%s%s%s %s%s%s\n' "$REV$BOLD" "$title" "$RESET" "$SEPC" "$fill" "$RESET"
-    else                         printf '%s%s%s %s%s%s\n' "$BOLD" "$title" "$RESET" "$SEPC" "$fill" "$RESET"; fi
-    return
-  fi
   mk=""; [ "$w" = "$active_win" ] && mk="•"
   gx=0; [ -n "$gph" ] && gx=1                     # status emoji = 2 cells, 1 char
   tw=$(( ${#mk} + ${#title} + gx ))
@@ -639,10 +663,14 @@ draw() {
     # over the loaded SESS_LIST (no tmux calls) — negligible per-frame cost.
     build_header
     printf '%s\n' "$hdr_out"
-    # rule under the header, with a ┴ closing the shaded tab zone's right edge
+    # rule under the header, with a ┴ closing each header zone's right edge │
+    # (the [ ➕ NEW ] zone at hdr_bound0, the tab zone at hdr_bound)
     local hr=$RULE
     if [ "$hdr_bound" -ge 1 ] && [ "$hdr_bound" -le "$cols" ]; then
       hr="${RULE:0:$(( hdr_bound - 1 ))}┴${RULE:$hdr_bound}"
+    fi
+    if [ "$hdr_bound0" -ge 1 ] && [ "$hdr_bound0" -le "$cols" ]; then
+      hr="${hr:0:$(( hdr_bound0 - 1 ))}┴${hr:$hdr_bound0}"
     fi
     printf '%s%s%s\n' "$SLATE" "$hr" "$RESET"
     local end=$(( offset + view_h )) j w kind a b mk selwin shown=0
@@ -672,12 +700,14 @@ draw() {
     elif [ "$INPUT_MODE" = slot ]; then foot="move window ${win_order[sel]} to slot: ${INPUT_TEXT}▌  (⏎ go · Esc cancel)"
     elif [ -n "$TOAST" ]; then foot="$TOAST"
     elif [ "$CONFIRM" = 1 ]; then foot="⏎ again = gracefully close window ${win_order[sel]} · any other key cancels"
+    elif [ "$FOCUS" = tabs ] && [ "$BARNEW" = 1 ]; then foot="⏎ new window in '${VSESS}' · ←/→ session · ↓ into list · Esc/q close"
     elif [ "$FOCUS" = tabs ]; then foot="←/→ switch session · ↓ into list · ⇥ commit · Esc/q close"
     else foot="(n)ew · (m)ove · (r)ename · (c)lose · (.) search · (t) sort:${sort_mode} · (s) new session · (?) tmux help · Esc/q"; fi
     [ ${#foot} -gt "$cols" ] && foot=${foot:0:$cols}
     printf '%s%s%s' "$MUTED" "$foot" "$RESET"
-    # tappable [ X ] close button, top-right corner; then park the cursor at the bottom
-    printf '\033[1;%dH%s[ X ]%s\033[%d;1H' $(( cols - 5 )) "$BOLD" "$RESET" "$rows"
+    # tappable [ ❌ CLOSE ] button, top-right corner (12 cells, ends at cols-1);
+    # then park the cursor at the bottom
+    printf '\033[1;%dH%s[ ❌ CLOSE ]%s\033[%d;1H' $(( cols - 12 )) "$BOLD" "$RESET" "$rows"
   } > "$TTY_OUT"
 }
 
@@ -693,7 +723,7 @@ move_sel() {
   (( sel < 0 )) && sel=0
   # in global search each result may live in a different session → recompute the
   # move-to-session chips (and NACT) for the newly-selected result's session.
-  [ "$SEARCH_ON" = 1 ] && [ "${win_order[sel]}" != "$NEWWIN_SENTINEL" ] && build_targets "${win_sess[sel]:-$VSESS}"
+  [ "$SEARCH_ON" = 1 ] && build_targets "${win_sess[sel]:-$VSESS}"
   local h=${whead[sel]}
   (( h < offset )) && offset=$h
   (( h >= offset + view_h )) && offset=$(( h - view_h + 1 ))
@@ -766,6 +796,7 @@ help_filter() {
     fi
   done
   HELP_N=${#HELP_DK[@]}
+  HELP_SEL=0
 }
 
 help_scroll() {
@@ -776,11 +807,51 @@ help_scroll() {
   (( HELP_OFF < 0 )) && HELP_OFF=0
 }
 
+# move the help selection by $1 entries (row-major grid: ±2 = same column, ±1 =
+# adjacent entry) and scroll just enough to keep it on-screen.
+help_move() {
+  [ "$HELP_N" -gt 0 ] || return
+  HELP_SEL=$(( HELP_SEL + $1 ))
+  (( HELP_SEL < 0 )) && HELP_SEL=0
+  (( HELP_SEL >= HELP_N )) && HELP_SEL=$(( HELP_N - 1 ))
+  local r=$(( HELP_SEL / 2 ))
+  (( r < HELP_OFF )) && HELP_OFF=$r
+  (( r >= HELP_OFF + view_h )) && HELP_OFF=$(( r - view_h + 1 ))
+  (( HELP_OFF < 0 )) && HELP_OFF=0
+}
+
+# run the SELECTED binding: replay `prefix + key` AT THE CLIENT (send-keys -K,
+# looked up in the client's key table) a beat after this popup tears down —
+# same defer pattern as do_newwindow — so the binding runs exactly as if typed.
+help_run() {
+  [ "$HELP_N" -gt 0 ] || return
+  local dk key ekey epfx tgt=""
+  dk=${HELP_DK[HELP_SEL]}
+  key=${dk#"$HELP_PFX "}
+  if [ -n "$JW_DASH_TEST" ]; then printf 'ACTION helprun %s\n' "$key"; exit 0; fi
+  # key names can BE quote characters (" and ') → escape for the '…' embedding
+  ekey=$(printf '%s' "$key" | sed "s/'/'\\\\''/g")
+  epfx=$(printf '%s' "$HELP_PFX" | sed "s/'/'\\\\''/g")
+  [ -n "$CLIENT" ] && tgt=" -c '$CLIENT'"
+  $TMUX_BIN run-shell -b "sleep 0.2; tmux send-keys -K${tgt} '$epfx' '$ekey'" 2>/dev/null
+  exit 0
+}
+
+# tap in help: an entry runs it; header/footer chrome dismisses the help layer.
+help_press() {
+  local y=$1 x=$2 r idx colw gap=2
+  { [ "$y" -ge 3 ] && [ "$y" -lt $(( rows - 1 )) ]; } 2>/dev/null || { help_exit; return; }
+  colw=$(( (cols - gap - 1) / 2 )); (( colw < 10 )) && colw=10
+  r=$(( HELP_OFF + y - 3 ))
+  idx=$(( r * 2 )); [ "$x" -gt $(( 1 + colw + gap )) ] && idx=$(( idx + 1 ))
+  if [ "$idx" -ge 0 ] && [ "$idx" -lt "$HELP_N" ]; then HELP_SEL=$idx; help_run; fi
+}
+
 help_enter() {
   [ "$HELP_LOADED" = 1 ] || help_load
-  HELP_ON=1; HELP_Q=""; HELP_OFF=0; CONFIRM=0; TOAST=""; help_filter
+  HELP_ON=1; HELP_Q=""; HELP_OFF=0; HELP_SEL=0; CONFIRM=0; TOAST=""; help_filter
 }
-help_exit() { HELP_ON=0; HELP_Q=""; HELP_OFF=0; }
+help_exit() { HELP_ON=0; HELP_Q=""; HELP_OFF=0; HELP_SEL=0; }
 
 # two-column render of the filtered bindings + type-ahead footer. All content is
 # ASCII, so ${#s} == display width (no emoji math needed here).
@@ -799,25 +870,29 @@ draw_help() {
       printf '%s%*sno binding matches "%s"  (Esc closes)%s\n' "$MUTED" "$hang" '' "$HELP_Q" "$RESET"
       shown=1
     fi
-    # row-major: row r shows entries 2r (left) and 2r+1 (right); scrolls by row
+    # row-major: row r shows entries 2r (left) and 2r+1 (right); scrolls by row.
+    # Pad each entry to colw FIRST, then wrap the SELECTED one in reverse video
+    # (styling after padding — ANSI bytes would break the %-*s width math).
     for (( r = HELP_OFF; r < HELP_OFF + view_h && r < rows_total; r++ )); do
       li=$(( r * 2 )); ri=$(( r * 2 + 1 ))
       printf -v lentry '%-*s %s' "$HELP_MAXK" "${HELP_DK[li]}" "${HELP_DESC[li]}"
       lentry=${lentry:0:colw}
+      printf -v lentry '%-*s' "$colw" "$lentry"
+      [ "$li" = "$HELP_SEL" ] && lentry="${REV}${lentry}${RESET}"
       if [ "$ri" -lt "$n" ]; then
         printf -v rentry '%-*s %s' "$HELP_MAXK" "${HELP_DK[ri]}" "${HELP_DESC[ri]}"
         rentry=${rentry:0:colw}
+        [ "$ri" = "$HELP_SEL" ] && rentry="${REV}${rentry}${RESET}"
       else rentry=""; fi
-      printf ' %-*s%*s%s\n' "$colw" "$lentry" "$gap" '' "$rentry"
+      printf ' %s%*s%s\n' "$lentry" "$gap" '' "$rentry"
       shown=$((shown+1))
     done
     for (( r = shown; r < view_h; r++ )); do printf '\n'; done
     printf '%s%s%s\n' "$SLATE" "$RULE" "$RESET"
-    local more=""; (( rows_total > view_h )) && more=" · ↑↓ scroll"
-    local foot="help: ${HELP_Q}▌  (${n} of ${#HELP_MDK[@]} · type to filter${more} · Esc close)"
+    local foot="help: ${HELP_Q}▌  (${n} of ${#HELP_MDK[@]} · type to filter · ↑↓←→ select · ⏎ run · Esc close)"
     [ ${#foot} -gt "$cols" ] && foot=${foot:0:$cols}
     printf '%s%s%s' "$MUTED" "$foot" "$RESET"
-    printf '\033[1;%dH%s[ X ]%s\033[%d;1H' $(( cols - 5 )) "$BOLD" "$RESET" "$rows"
+    printf '\033[1;%dH%s[ ❌ CLOSE ]%s\033[%d;1H' $(( cols - 12 )) "$BOLD" "$RESET" "$rows"
   } > "$TTY_OUT"
 }
 
@@ -829,22 +904,36 @@ k_up() {
   CONFIRM=0
   # ↑ off row 1 lifts focus to the session bar — but NOT during global search
   # (there's no "viewed session" to browse there; stay in the results).
-  if [ "$sel" -le 0 ]; then [ "$SEARCH_ON" = 1 ] || { FOCUS=tabs; ACTION=0; }; return; fi
+  if [ "$sel" -le 0 ]; then [ "$SEARCH_ON" = 1 ] || { FOCUS=tabs; BARNEW=0; ACTION=0; }; return; fi
   move_sel -1; ACTION=0                             # 3A: vertical motion re-arms open
 }
 k_down() {
   CONFIRM=0
-  if [ "$FOCUS" = tabs ]; then FOCUS=body; ACTION=0; sel=0; move_sel 0; return; fi
+  if [ "$FOCUS" = tabs ]; then FOCUS=body; BARNEW=0; ACTION=0; sel=0; move_sel 0; return; fi
   move_sel 1; ACTION=0
 }
-k_left()  { if [ "$FOCUS" = tabs ]; then view_session -1; else CONFIRM=0; [ "$ACTION" -gt 0 ] && ACTION=$((ACTION-1)); fi; }
-k_right() { if [ "$FOCUS" = tabs ]; then view_session  1; else CONFIRM=0; [ "$ACTION" -lt $(( NACT - 1 )) ] && ACTION=$((ACTION+1)); fi; }
+# bar_move — ←/→ on the bar cycle a cursor over [ ➕ NEW ] + the session tabs
+# (wraps). Landing on a tab VIEWS that session (as before); landing on NEW
+# keeps the current view — ⏎ there creates a window in the VIEWED session.
+bar_move() {
+  local p; sview
+  if [ "$BARNEW" = 1 ]; then p=0; else p=$(( __sv + 1 )); fi
+  p=$(( (p + $1 + nsess + 1) % (nsess + 1) ))
+  if [ "$p" -eq 0 ]; then BARNEW=1
+  else BARNEW=0; view_session "=$(( p - 1 ))"; fi
+}
+k_left()  { if [ "$FOCUS" = tabs ]; then bar_move -1; else CONFIRM=0; [ "$ACTION" -gt 0 ] && ACTION=$((ACTION-1)); fi; }
+k_right() { if [ "$FOCUS" = tabs ]; then bar_move  1; else CONFIRM=0; [ "$ACTION" -lt $(( NACT - 1 )) ] && ACTION=$((ACTION+1)); fi; }
 # Tab / Shift-Tab: switch session from anywhere and COMMIT into the list on the
 # active window (keeps the pre-existing ⇥ behavior; absorbs the old ←/→ switch).
-k_tab()   { view_session "$1"; FOCUS=body; ACTION=0; CONFIRM=0; }
-# Enter: on the bar, drop into the list; in the list, run the armed chip.
+k_tab()   { view_session "$1"; FOCUS=body; BARNEW=0; ACTION=0; CONFIRM=0; }
+# Enter: on the bar, run [ ➕ NEW ] if the cursor is on it, else drop into the
+# list; in the list, run the armed chip.
 k_enter() {
-  if [ "$FOCUS" = tabs ]; then FOCUS=body; ACTION=0; CONFIRM=0; sel=0; move_sel 0; return; fi
+  if [ "$FOCUS" = tabs ]; then
+    [ "$BARNEW" = 1 ] && { CONFIRM=0; do_newwindow; return; }
+    FOCUS=body; ACTION=0; CONFIRM=0; sel=0; move_sel 0; return
+  fi
   run_action
 }
 
@@ -853,8 +942,6 @@ k_enter() {
 # · NACT-4 = new session · NACT-3 = move-to-slot · NACT-2 = rename · NACT-1 = close.
 run_action() {
   [ "$nwin" -le 0 ] && return                      # no window selected (search matched 0)
-  # the synthetic "＋ new window" row (R2): any activation creates a window.
-  [ "${win_order[sel]}" = "$NEWWIN_SENTINEL" ] && { CONFIRM=0; do_newwindow; return; }
   if [ "$ACTION" -eq 0 ]; then CONFIRM=0; jump_win "${win_order[sel]}" "${win_sess[sel]:-$VSESS}"; return; fi
   if [ "$ACTION" -eq $(( NACT - 1 )) ]; then       # close: two-step confirm
     if [ "$CONFIRM" = 1 ]; then CONFIRM=0; do_close; else CONFIRM=1; fi
@@ -869,11 +956,10 @@ run_action() {
 
 # accelerator (change #4): fire a specific chip on the selected row by its letter
 # — (n)ew session · (m)ove · (r)ename · (c)lose. Body focus + a real window only
-# (the ＋ new-window row and the tab bar have no accelerators).
+# (the tab bar has no accelerators).
 accel() {
   [ "$FOCUS" = body ] || return
   [ "$nwin" -le 0 ] && return
-  [ "${win_order[sel]}" = "$NEWWIN_SENTINEL" ] && return
   ACTION=$1; run_action
 }
 
@@ -949,9 +1035,10 @@ do_new() {
   refresh_after_action
 }
 
-# do_newwindow (R2) — create a fresh window in the VIEWED session and OPEN it
+# do_newwindow — create a fresh window in the VIEWED session and OPEN it
 # (same landing as jump_win: select it, switch this client across sessions if
-# needed, then close the popup). Triggered by the synthetic "＋ new window" row.
+# needed, then close the popup). Triggered by the header's [ ➕ NEW ] button
+# (tap, or ⏎ with the bar cursor on it).
 do_newwindow() {
   local idx
   # TEST path: create synchronously so the harness can observe the new window
@@ -1031,7 +1118,7 @@ do_newsession() {
 # Claude refuses to exit (mid-turn, permission prompt), NOTHING is killed — a
 # toast says so. Windows with no Claude are killed directly.
 do_close() {
-  local pane cmd i
+  local pane cmd i wc csess other
   sel_resolve
   [ -n "$__wid" ] || { TOAST="close: window $__w not found"; return; }
   [ -n "$JW_DASH_TEST" ] && printf 'ACTION close %s:%s\n' "$__wsess" "$__w"
@@ -1052,6 +1139,28 @@ do_close() {
     if [ -n "$cmd" ] && [[ "$cmd" =~ $CCRE ]]; then
       TOAST="'$__wname' did not exit after /exit — NOT closed (it may be mid-turn)"
       refresh_after_action; return
+    fi
+  fi
+  # LAST-WINDOW GUARD (2026-07-16): killing a session's only window kills the
+  # session, and if THIS client is attached to it, tmux dumps the client back
+  # to the shell. Land it in the most-recently-active OTHER session first (its
+  # current window = its MRU window), so closing the last window never kicks
+  # you out of tmux.
+  wc=$($TMUX_BIN list-windows -t "$__wsess" -F x 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$wc" -le 1 ]; then
+    csess=$SESSION
+    if [ -n "$CLIENT" ]; then
+      csess=$($TMUX_BIN display-message -p -t "$CLIENT" '#{client_session}' 2>/dev/null)
+      [ -n "$csess" ] || csess=$SESSION
+    fi
+    if [ "$csess" = "$__wsess" ]; then
+      other=$($TMUX_BIN list-sessions -F '#{session_activity} #{session_name}' 2>/dev/null \
+              | awk -v s="$__wsess" '$2!=s' | sort -rn | head -1 | cut -d' ' -f2-)
+      if [ -n "$other" ]; then
+        [ -n "$JW_DASH_TEST" ] && printf 'ACTION lastwin-switch %s\n' "$other"
+        if [ -n "$CLIENT" ]; then $TMUX_BIN switch-client -c "$CLIENT" -t "$other" 2>/dev/null
+        elif [ -z "$JW_DASH_TEST" ]; then $TMUX_BIN switch-client -t "$other" 2>/dev/null; fi
+      fi
     fi
   fi
   $TMUX_BIN kill-window -t "$__wid" 2>/dev/null
@@ -1172,7 +1281,10 @@ press() {
   local y=$1 x=$2 i idx
   [ "$y" -ge 1 ] 2>/dev/null || return
   if [ "$y" -le 1 ]; then
-    [ "$x" -ge $(( cols - 6 )) ] 2>/dev/null && exit 0            # [ X ]
+    [ "$x" -ge $(( cols - 12 )) ] 2>/dev/null && exit 0           # [ ❌ CLOSE ]
+    if [ "$x" -ge "$new_lo" ] 2>/dev/null && [ "$x" -le "$new_hi" ]; then
+      do_newwindow; return                                        # [ ➕ NEW ]
+    fi
     for (( i=0; i<${#tab_lo[@]}; i++ )); do
       if [ "$x" -ge "${tab_lo[i]}" ] && [ "$x" -le "${tab_hi[i]}" ]; then
         view_session "=${tab_of[i]}"; return
@@ -1195,8 +1307,7 @@ press() {
   fi
   idx=$(( offset + y - 3 ))
   if [ "$idx" -ge 0 ] && [ "$idx" -lt "$total" ]; then
-    if [ "${line_win[$idx]}" = "$NEWWIN_SENTINEL" ]; then do_newwindow
-    else jump_win "${line_win[$idx]}" "${line_sess[$idx]:-$VSESS}"; fi
+    jump_win "${line_win[$idx]}" "${line_sess[$idx]:-$VSESS}"
   fi
 }
 
@@ -1280,17 +1391,23 @@ while :; do
     # bare Esc: leave tmux-help / global search if active, else close the popup
     [ "$b2" != "[" ] && { [ "$HELP_ON" = 1 ] && { help_exit; continue; }; [ "$SEARCH_ON" = 1 ] && { search_exit; continue; }; exit 0; }
     IFS= read -rsn1 -t 1 b3 < "$TTY_IN" || continue
-    # tmux-help mode: ↑↓ (and PgUp/PgDn) scroll; every other CSI key is inert.
-    # Mouse (M / <) falls through to the shared block below, which routes the
-    # wheel to help_scroll and treats a click as "dismiss help".
+    # tmux-help mode: ↑↓←→ move the SELECTION over the 2-col grid (↑↓ = same
+    # column, ←→ = adjacent entry; scrolls to follow), PgUp/PgDn page, CSI-u
+    # Enter runs the selected binding. Mouse (M / <) falls through to the
+    # shared block below, which routes the wheel to help_scroll and a tap to
+    # help_press (entry = run it, chrome = dismiss).
     if [ "$HELP_ON" = 1 ]; then
       case "$b3" in
-        A) help_scroll -1; continue ;;
-        B) help_scroll  1; continue ;;
-        C|D) continue ;;
+        A) help_move -2; continue ;;
+        B) help_move  2; continue ;;
+        C) help_move  1; continue ;;
+        D) help_move -1; continue ;;
         [0-9]) seq="$b3"
                while IFS= read -rsn1 -t 1 cc < "$TTY_IN"; do seq="$seq$cc"; case "$cc" in [A-Za-z~]) break ;; esac; done
-               case "$seq" in 5~) help_scroll "-$view_h" ;; 6~) help_scroll "$view_h" ;; esac
+               case "$seq" in
+                 13u|10u|13\;*u|10\;*u) help_run ;;
+                 5~) help_move "-$(( view_h * 2 ))" ;; 6~) help_move "$(( view_h * 2 ))" ;;
+               esac
                continue ;;
         M|'<') : ;;                    # mouse → shared block below
         *) continue ;;
@@ -1310,17 +1427,17 @@ while :; do
           64) if [ "$HELP_ON" = 1 ]; then [ "$btn" = 0 ] && help_scroll -3 || help_scroll 3
               else [ "$btn" = 0 ] && scroll -3 || scroll 3; fi; continue ;;
         esac
-        [ "$HELP_ON" = 1 ] && { [ "$btn" = 0 ] && help_exit; continue; }   # click dismisses help
+        [ "$HELP_ON" = 1 ] && { [ "$btn" = 0 ] && help_press "$(( y - 32 ))" "$(( x - 32 ))"; continue; }
         [ "$btn" = 0 ] && press "$(( y - 32 ))" "$(( x - 32 ))"
         continue ;;
       '<') # SGR mouse: \e[<btn;x;yM  (press) / m (release)
         seq=""
         while IFS= read -rsn1 -t 1 c < "$TTY_IN"; do case "$c" in M|m) break ;; *) seq="$seq$c" ;; esac; done
         btn=${seq%%;*}; rest=${seq#*;}; mx=${rest%%;*}; my=${rest##*;}
-        if [ "$HELP_ON" = 1 ]; then      # in help: wheel scrolls, a click dismisses
+        if [ "$HELP_ON" = 1 ]; then      # in help: wheel scrolls, a tap runs/dismisses
           case "$btn" in
             64) help_scroll -3 ;; 65) help_scroll 3 ;;
-            0)  [ "$c" = "M" ] && help_exit ;;
+            0)  [ "$c" = "M" ] && help_press "$my" "$mx" ;;
           esac; continue
         fi
         case "$btn" in
@@ -1361,13 +1478,15 @@ while :; do
     esac
     continue
   fi
-  # ── tmux-help: printable keys edit the filter query; ↑↓/wheel scroll (handled
-  # in the CSI/mouse blocks above); Esc closes (bare-Esc block above). PERSISTS
-  # until Esc, like search — backspacing to empty just shows all bindings. ──
+  # ── tmux-help: printable keys edit the filter query; ↑↓←→/wheel move+scroll
+  # (handled in the CSI/mouse blocks above); ⏎ RUNS the selected binding; Esc
+  # closes (bare-Esc block above). PERSISTS until Esc, like search —
+  # backspacing to empty just shows all bindings. ──
   if [ "$HELP_ON" = 1 ]; then
     case "$key" in
       $'\x7f'|$'\x08') HELP_Q="${HELP_Q%?}"; HELP_OFF=0; help_filter ;;
-      $'\r'|$'\n'|''|$'\t') : ;;                        # Enter/Tab inert (reference view)
+      $'\r'|$'\n'|'') help_run ;;                       # ⏎ = run the selected binding
+      $'\t') : ;;                                        # Tab inert
       [[:print:]]) HELP_Q="${HELP_Q}${key}"; HELP_OFF=0; help_filter ;;
       *) : ;;
     esac

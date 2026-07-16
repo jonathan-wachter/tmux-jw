@@ -179,9 +179,18 @@ f=$(printf '%s' "$out" | last_frame)
 check "bar → views next session"           '[[ "$f" == *"1) beta-one"* ]]'
 check "bar focus footer shown"             '[[ "$f" == *"↓ into list"* ]]'
 check "no ACTION browsing on the bar"      '[[ "$out" != *"ACTION"* ]]'
-out=$(dash cc-alpha 1 '\033[A\033[D')      # ↑ to bar, ← wraps backward to cc-parked
+# ← off the first tab lands on the [ ➕ NEW ] stop first (2026-07-16), then
+# wraps backward through the tabs — so cc-parked is now TWO ← away.
+out=$(dash cc-alpha 1 '\033[A\033[D')      # ↑ to bar, ← onto the NEW stop
 f=$(printf '%s' "$out" | last_frame)
-check "bar ← wraps to cc-parked"           '[[ "$f" == *"1) ✅ parked-one"* ]]'
+check "bar ← lands on [ ➕ NEW ] stop"      '[[ "$f" == *"⏎ new window in "*"cc-alpha"* && "$out" != *"ACTION"* ]]'
+out=$(dash cc-alpha 1 '\033[A\033[D\033[D') # ↑ to bar, ←← wraps past NEW to cc-parked
+f=$(printf '%s' "$out" | last_frame)
+check "bar ←← wraps to cc-parked"          '[[ "$f" == *"1) ✅ parked-one"* ]]'
+out=$(dash cc-alpha 1 '\033[A\033[D\r')    # ↑, ← onto NEW, ⏎ → new window in cc-alpha
+check "⏎ on NEW stop emits ACTION newwindow" '[[ "$out" == *"ACTION newwindow cc-alpha:"* ]]'
+nwidx=$(printf '%s' "$out" | sed -n 's/.*ACTION newwindow cc-alpha:\([0-9]*\).*/\1/p')
+[ -n "$nwidx" ] && "$TMUXB" -L "$SOCK" kill-window -t "cc-alpha:$nwidx" 2>/dev/null
 out=$(dash cc-alpha 1 '\033[A\033[B\r')    # ↑ to bar, ↓ into list (row 1), Enter → open row 1
 check "bar ↓ lands on row 1, Enter opens"  '[[ "$out" == *"ACTION open cc-alpha:1"* ]]'
 
@@ -244,9 +253,18 @@ check "help Esc returns to the list"       '[[ "$f" == *"❯ new session ❮"* &
 short() { printf "$1" | JW_DASH_TEST=1 JW_DASH_COLS=120 JW_DASH_ROWS=12 \
   JW_TMUX="$TMUXB -L $SOCK" TMPDIR="$WORK" JW_DASH_PARKING=cc-parked \
   bash hooks/tmux-claude-dashboard.sh cc-alpha 1 2>>"$WORK/dash.err" | last_frame; }
+# ↓ moves the SELECTION (2026-07-16); the list scrolls once the selection
+# passes the bottom of a short popup (view_h = 8 here → 10 ↓s force a scroll)
 top0=$(short '?'            | sed -n '3p')
-top3=$(short '?\033[B\033[B\033[B' | sed -n '3p')
-check "help ↓ scrolls the list"            '[ "$top0" != "$top3" ] && [[ "$top0" == *"${pfx} Space"* ]]'
+top10=$(short '?\033[B\033[B\033[B\033[B\033[B\033[B\033[B\033[B\033[B\033[B' | sed -n '3p')
+check "help ↓ selection scrolls the list"  '[ "$top0" != "$top10" ] && [[ "$top0" == *"${pfx} Space"* ]]'
+# the selection is reverse-video highlighted; ⏎ RUNS the selected binding
+hraw=$(dash cc-alpha 1 '?' | last_frame_raw)
+check "help selection is highlighted"      '[[ "$hraw" == *"${REV_SEQ}${pfx} "* ]]'
+out=$(dash cc-alpha 1 '?\r')
+check "help ⏎ emits ACTION helprun"        '[[ "$out" == *"ACTION helprun "* ]]'
+out=$(dash cc-alpha 1 '?\033[B\r')
+check "help ↓⏎ runs the third entry"       '[[ "$out" == *"ACTION helprun "* ]]'
 # footer of the NORMAL view now advertises (?) tmux help (render wide so the
 # full accelerator row fits without truncation)
 f=$(printf '' | JW_DASH_TEST=1 JW_DASH_COLS=150 JW_DASH_ROWS=24 \
@@ -262,16 +280,21 @@ check "'/' does not enter filter mode"     '[[ "$f" != *"filter: "* ]]'
 check "'/' leaves the full list intact"    '[[ "$f" == *"alfa-one"* && "$f" == *"alfa-two"* && "$f" == *"alfa-three"* ]]'
 
 echo "── 6. dashboard: mouse — tab click views, row click opens ────────"
-# header capsule "❯ cc-beta ❮" starts after "❯ cc-alpha ❮" (12 cols) + 2 sep = col 15
-out=$(dash cc-alpha 1 '\033[<0;16;1M')
+# header: [ ➕ NEW ] zone cols 2-11, │ at 13, tabs from col 15 —
+# "❯ cc-alpha ❮" = 15-26 + 2 sep → "❯ cc-beta ❮" starts col 29
+out=$(dash cc-alpha 1 '\033[<0;30;1M')
 f=$(printf '%s' "$out" | last_frame)
 check "SGR click on beta tab views beta"   '[[ "$f" == *"1) beta-one"* && "$out" != *"ACTION"* ]]'
+out=$(dash cc-alpha 1 '\033[<0;5;1M')      # tap inside the [ ➕ NEW ] zone
+check "tap on [ ➕ NEW ] creates a window"  '[[ "$out" == *"ACTION newwindow cc-alpha:"* ]]'
+nwidx=$(printf '%s' "$out" | sed -n 's/.*ACTION newwindow cc-alpha:\([0-9]*\).*/\1/p')
+[ -n "$nwidx" ] && "$TMUXB" -L "$SOCK" kill-window -t "cc-alpha:$nwidx" 2>/dev/null
 out=$(dash cc-alpha 1 '\033[<0;5;3M')      # row 3 = first content line = window 1
 check "SGR click on row 1 opens win 1"     '[[ "$out" == *"ACTION open cc-alpha:1"* ]]'
 out=$(dash cc-alpha 1 '\033[<0;5;2M')      # row 2 = header rule = inert chrome
 check "click on header rule is a no-op"    '[[ "$out" != *"ACTION"* ]]'
-out=$(dash cc-alpha 1 '\033[<0;109;1M')    # top-right [ X ] zone (col ≥ cols-6=104)
-check "[ X ] click closes without ACTION"  '[[ "$out" != *"ACTION"* ]]'
+out=$(dash cc-alpha 1 '\033[<0;109;1M')    # top-right [ ❌ CLOSE ] zone (col ≥ cols-12=98)
+check "[ ❌ CLOSE ] click closes, no ACTION" '[[ "$out" != *"ACTION"* ]]'
 
 echo "── 7. dashboard: q / Esc close, unknown key is a no-op ───────────"
 out=$(dash cc-alpha 1 'q')
@@ -552,16 +575,29 @@ out=$(dash cc-acc 1 'cc');           check "c c → closes via accel"  '[[ "$out
 out=$(dash cc-acc 1 'n');            check "n → new session"         '[[ "$out" == *"ACTION new cc-acc:"* ]]'
 "$TMUXB" -L "$SOCK" kill-session -t cc-acc 2>/dev/null; "$TMUXB" -L "$SOCK" kill-session -t acc2 2>/dev/null
 
-echo "── 13c. R2: '+ new window' row creates a window in the session ────"
+echo "── 13c. [ ➕ NEW ] header button creates a window in the session ──"
 "$TMUXB" -L "$SOCK" new-session -d -s cc-nw -n nw1 -x 200 -y 50
 "$TMUXB" -L "$SOCK" set-option -w -t cc-nw:1 @ccname nw1
-f=$(dash cc-nw 1 '' | last_frame);  check "'+ new window' row shown"  '[[ "$f" == *"+ new window"* ]]'
+f=$(dash cc-nw 1 '' | last_frame)
+check "[ ➕ NEW ] button shown in header"   '[[ "$f" == *"[ ➕ NEW ]"* ]]'
+check "'+ new window' bottom row is gone"  '[[ "$f" != *"+ new window"* ]]'
 before=$("$TMUXB" -L "$SOCK" list-windows -t cc-nw -F x | wc -l | tr -d ' ')
-out=$(dash cc-nw 1 '\033[B\r')      # ↓ onto the row, Enter → create
-check "row Enter emits ACTION newwindow"  '[[ "$out" == *"ACTION newwindow cc-nw:"* ]]'
+out=$(dash cc-nw 1 '\033[<0;5;1M')  # tap the [ ➕ NEW ] zone → create
+check "NEW tap emits ACTION newwindow"     '[[ "$out" == *"ACTION newwindow cc-nw:"* ]]'
 after=$("$TMUXB" -L "$SOCK" list-windows -t cc-nw -F x | wc -l | tr -d ' ')
 check "a window was actually created"      '[ "$after" -gt "$before" ]'
 "$TMUXB" -L "$SOCK" kill-session -t cc-nw 2>/dev/null
+
+echo "── 13c2. closing a session's LAST window switches the client out ──"
+# killing the only window kills the session; the guard must first move the
+# client to the most-recently-active OTHER session instead of dumping it out
+# of tmux (test mode: emits the switch as an ACTION line, skips switch-client).
+"$TMUXB" -L "$SOCK" new-session -d -s cc-solo -n solo1 -x 200 -y 50
+"$TMUXB" -L "$SOCK" set-option -w -t cc-solo:1 @ccname solo1
+out=$(dash cc-solo 1 'cc')          # (c)lose accel + confirming c on the ONLY window
+check "last-win close emits lastwin-switch" '[[ "$out" == *"ACTION lastwin-switch "* ]]'
+check "…and the close itself still runs"    '[[ "$out" == *"ACTION close cc-solo:1"* ]]'
+check "…and the session is gone"            '! "$TMUXB" -L "$SOCK" has-session -t =cc-solo 2>/dev/null'
 
 echo "── 13d. R3: '.' global cross-session type-ahead search ───────────"
 "$TMUXB" -L "$SOCK" new-session -d -s cc-sa -n zebra-alpha -x 200 -y 50
@@ -582,8 +618,11 @@ out=$(dash cc-sa 1 '.zebra-beta\r')        # narrow to the cross-session one, op
 check "search opens cross-session (cc-sb)" '[[ "$out" == *"ACTION open cc-sb:1"* ]]'
 f=$(dash cc-sa 1 '.qqqzzz' | last_frame)
 check "no-match shows a notice"            '[[ "$f" == *'"'"'no window matches "qqqzzz"'"'"'* ]]'
-f=$(dash cc-sa 1 '.zebra\033' | last_frame)   # Esc leaves search → normal view (has the + row)
-check "Esc exits search to normal view"    '[[ "$f" == *"+ new window"* && "$f" != *"search:"* ]]'
+f=$(dash cc-sa 1 '.zebra\033' | last_frame)   # Esc leaves search → normal view (no · session suffix)
+# (the selected row's title may truncate hard to fit the chip strip — by this
+# point the run has ~6 sessions of move chips — so match a short prefix;
+# "search:" absent = the search layer is gone)
+check "Esc exits search to normal view"    '[[ "$f" == *"1) zebra-"* && "$f" != *"search:"* ]]'
 # session-aware chips: the selected result's move targets EXCLUDE its own session.
 # Render WIDE so no session chips are dropped-to-fit, and scope to the chip line
 # (the header tab bar also lists every session).
