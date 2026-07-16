@@ -282,12 +282,12 @@ esac
 
 # ── gather THIS session's windows (RAW — cells are built later, once the
 #    dynamic name cap L is known; see DYNAMIC TAB WIDTH below) ─────────────────
-idx=(); rname=(); rg=(); rbg=(); text=(); slot=(); n=0
+idx=(); rname=(); rg=(); rbg=(); rfg=(); text=(); slot=(); n=0
 # \x1f (unit separator) as delimiter, NOT tab: tab is IFS whitespace, so
 # consecutive tabs COLLAPSE on read — an empty @ccbg would shift @ccproj
 # into wb (latent for years with trailing-empty fields; exposed 2026-07-13
 # when a non-empty field landed after an empty one). \x1f never collapses.
-while IFS=$'\x1f' read -r wi wn ws wb wp wcc; do
+while IFS=$'\x1f' read -r wi wn ws wb wp wf wcc; do
   [ -z "$wi" ] && continue
   wn=${wn:0:$NW}; glyph "$ws" g
   # NO-PROJECT MARKER (2026-07-13, PERSISTENT per JW): a Claude window with no
@@ -306,8 +306,8 @@ while IFS=$'\x1f' read -r wi wn ws wb wp wcc; do
   # "7•name" cell prefix in the 3-row mode. border() degrades right-to-left
   # (·P? first, then the emoji) so the number survives the narrowest cells.
   g="${wi}${g:+·${g}}"
-  n=$((n+1)); idx[n]=$wi; rname[n]=$wn; rg[n]=$g; rbg[n]=$wb
-done < <(tmux list-windows -t "$session" -F $'#{window_index}\x1f#{?#{@ccname},#{@ccname},#{window_name}}\x1f#{@ccstate}\x1f#{@ccbg}\x1f#{@ccproj}\x1f#{pane_current_command}' 2>/dev/null)
+  n=$((n+1)); idx[n]=$wi; rname[n]=$wn; rg[n]=$g; rbg[n]=$wb; rfg[n]=$wf
+done < <(tmux list-windows -t "$session" -F $'#{window_index}\x1f#{?#{@ccname},#{@ccname},#{window_name}}\x1f#{@ccstate}\x1f#{@ccbg}\x1f#{@ccproj}\x1f#{@ccfg}\x1f#{pane_current_command}' 2>/dev/null)
 
 # ── status box: GLOBAL state counts across ALL tmux windows (every session),
 #    plus the tmux session count (ns) for the block's info row — one pass, no
@@ -330,7 +330,7 @@ done < <(tmux list-windows -a -F '#{session_name}	#{@ccstate}' 2>/dev/null)
 # global-state multiset. Stored alongside the rows so a future reader could match
 # it; the reader only checks the cheap subset, the mtime gate covers the rest.
 win_sig=""
-for ((k=1;k<=n;k++)); do win_sig="${win_sig}${idx[k]}:${rname[k]}${rg[k]}${rbg[k]};"; done
+for ((k=1;k<=n;k++)); do win_sig="${win_sig}${idx[k]}:${rname[k]}${rg[k]}${rbg[k]}${rfg[k]};"; done
 # BARMODE (2026-07-13): mode 3 moves window numbers OUT of the tab cells onto
 # the TOP border (┤2├, mirroring the bottom-border glyphs); the 1-line compact
 # mode has no borders, so it keeps them INLINE ("2•name"). One show per BUILD
@@ -540,17 +540,17 @@ fi
 # status glyph, rendered by border() centered in the cell's BOTTOM border run;
 # 5th arg = @ccbg — BG-BUSY windows render their tab text in ITALICS (JW 2026-
 # 07-09: work is being done by a background session, not the interactive one)
-ctext=(); crange=(); cinv=(); cglyph=(); cital=()
-add_cell() { local i=${#ctext[@]}; ctext[i]="$1"; crange[i]="$2"; cinv[i]="$3"; cglyph[i]="$4"; cital[i]="${5:-}"; }
+ctext=(); crange=(); cinv=(); cglyph=(); cital=(); ccol=()
+add_cell() { local i=${#ctext[@]}; ctext[i]="$1"; crange[i]="$2"; cinv[i]="$3"; cglyph[i]="$4"; cital[i]="${5:-}"; ccol[i]="${6:-}"; }
 # ◀ only when there's left overflow (earlier windows scrolled off). If everything
 # fits (s==1, e==n) neither arrow shows — the windows just start at the left border.
 if (( s > 1 )); then add_cell "$LBTN" "user|bscrollL" 2 "" ""; fi
-if [ "$pmode" = left ]; then tail_w "${text[pp]}" "$Lp" __pt; add_cell "$__pt" "window|${idx[pp]}" 0 "${rg[pp]}" "${rbg[pp]}"; fi   # partial tab → SELECTS its window (not scroll)
+if [ "$pmode" = left ]; then tail_w "${text[pp]}" "$Lp" __pt; add_cell "$__pt" "window|${idx[pp]}" 0 "${rg[pp]}" "${rbg[pp]}" "${rfg[pp]}"; fi   # partial tab → SELECTS its window (not scroll)
 for ((k=s;k<=e;k++)); do
   if [ "$k" = "$curpos" ]; then ci=1; else ci=0; fi
-  add_cell "${text[k]}" "window|${idx[k]}" "$ci" "${rg[k]}" "${rbg[k]}"
+  add_cell "${text[k]}" "window|${idx[k]}" "$ci" "${rg[k]}" "${rbg[k]}" "${rfg[k]}"
 done
-if [ "$pmode" = right ]; then head_w "${text[pp]}" "$Lp" __pt; add_cell "$__pt" "window|${idx[pp]}" 0 "${rg[pp]}" "${rbg[pp]}"; fi   # partial tab → SELECTS its window (not scroll)
+if [ "$pmode" = right ]; then head_w "${text[pp]}" "$Lp" __pt; add_cell "$__pt" "window|${idx[pp]}" 0 "${rg[pp]}" "${rbg[pp]}" "${rfg[pp]}"; fi   # partial tab → SELECTS its window (not scroll)
 
 # final cell: width fills the table to `tw` exactly (gapless).
 pre_w=1; for ((i=0;i<${#ctext[@]};i++)); do dwidth "${ctext[i]}" __cw; pre_w=$(( pre_w + __cw + 1 )); done
@@ -677,10 +677,14 @@ m="${GRID}│"
 for ((i=0;i<nc;i++)); do
   it=""; itoff=""
   if [ "${cital[i]}" = 1 ]; then it='#[italics]'; itoff='#[noitalics]'; fi
-  if   [ "${cinv[i]}" = 1 ]; then m="${m}${SLATE}${it}${ctext[i]}${itoff}${GRID}│"
+  # @ccfg per-window tab color (2026-07-16, JW: "email" window in #6566FF).
+  # fg-only override; the trailing GRID re-assert keeps the │ gridline clean.
+  cf=""; cfoff=""
+  if [ -n "${ccol[i]}" ]; then cf="#[fg=${ccol[i]}]"; cfoff="$GRID"; fi
+  if   [ "${cinv[i]}" = 1 ]; then m="${m}${SLATE}${it}${cf}${ctext[i]}${itoff}${GRID}│"
   elif [ "${cinv[i]}" = 3 ]; then m="${m}${ctext[i]}│"   # blank fill: grid bg, no range, no glyph
   elif [ "${cinv[i]}" = 2 ]; then m="${m}#[range=${crange[i]}]#[bold]${ctext[i]}#[nobold]#[norange]│"
-  else m="${m}#[range=${crange[i]}]${it}${ctext[i]}${itoff}#[norange]│"; fi
+  else m="${m}#[range=${crange[i]}]${it}${cf}${ctext[i]}${itoff}${cfoff}#[norange]│"; fi
 done
 row_out[1]="${BLK_MID}${m}"
 
