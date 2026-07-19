@@ -720,9 +720,43 @@ draw_entry_rule() {
 # logical index) + abar_row for press(). ASCII [ ] frames on purpose (no ❯❮ —
 # ambiguous-width, 2 cells in iOS terminals; tap columns must be exact).
 abar_lo=(); abar_hi=(); abar_row=0
+MVP_ACT=()   # movepick picker: abar span i → MOVE_TARGETS index (−1 slot · −2 cancel)
+# draw_abar_movepick — the [ move ] DESTINATION PICKER (2026-07-19): tapping
+# [ move ] on the phone swaps the bar for one chip per other Claude session
+# (same MOVE_TARGETS as the wide-mode chips), plus [ slot # ] (the old
+# within-session slot prompt) and [ x ] (cancel). Trailing session chips are
+# dropped when they don't fit — slot #/x always stay. Runs as INPUT_MODE=
+# movepick, so stray keys are swallowed and a tap anywhere else cancels.
+draw_abar_movepick() {
+  local n=${#MOVE_TARGETS[@]} shown t i lbl st col used styled="" pad
+  local lbls=()
+  while :; do
+    shown=$n; used=$(( 10 + 5 ))                    # "[ slot # ]" + "[ x ]"
+    for (( i=0; i<shown; i++ )); do
+      t=${MOVE_TARGETS[i]}; [ ${#t} -gt 8 ] && t="${t:0:7}…"
+      lbls[i]=$t; used=$(( used + ${#t} + 5 ))      # "[ t ]" + 1 gap
+    done
+    [ "$used" -le "$cols" ] || { n=$(( n - 1 )); [ "$n" -lt 0 ] && break; continue; }
+    break
+  done
+  col=1
+  for (( i=0; i<shown; i++ )); do
+    lbl=${lbls[i]}
+    abar_lo+=("$col"); abar_hi+=($(( col + ${#lbl} + 3 ))); MVP_ACT+=("$i")
+    styled="${styled}${MUTED}[ ${lbl} ]${RESET} "
+    col=$(( col + ${#lbl} + 5 ))
+  done
+  abar_lo+=("$col"); abar_hi+=($(( col + 9 ))); MVP_ACT+=(-1)
+  styled="${styled}${MUTED}[ slot # ]${RESET} "
+  col=$(( col + 11 ))
+  abar_lo+=("$col"); abar_hi+=($(( col + 4 ))); MVP_ACT+=(-2)
+  styled="${styled}${REDFG}[ x ]${RESET}"
+  printf '%s\n' "$styled"
+}
 draw_abar() {
-  abar_lo=(); abar_hi=(); abar_row=$(( rows - 2 ))
+  abar_lo=(); abar_hi=(); MVP_ACT=(); abar_row=$(( rows - 2 ))
   [ "$nwin" -le 0 ] && { printf '\n'; return; }    # nothing selected → keep geometry
+  if [ "$INPUT_MODE" = movepick ]; then draw_abar_movepick; return; fi
   local labels=(open new move ren close)
   local aidx=(0 $(( NACT - 4 )) $(( NACT - 3 )) $(( NACT - 2 )) $(( NACT - 1 )))
   local i lbl a st col lead gap used=0 pad styled=""
@@ -799,6 +833,7 @@ draw() {
     if [ "$SEARCH_ON" = 1 ]; then foot="search: ${SEARCH_Q}▌  (${nwin} results across all sessions · ↑↓ pick · ⏎ open · Esc close search)"
     elif [ "$INPUT_MODE" = rename ]; then foot="rename to: ${INPUT_TEXT}▌  (⏎ save · Esc cancel)"
     elif [ "$INPUT_MODE" = slot ]; then foot="move window ${win_order[sel]} to slot: ${INPUT_TEXT}▌  (⏎ go · Esc cancel)"
+    elif [ "$INPUT_MODE" = movepick ]; then foot="move window ${win_order[sel]} where? tap a destination · [ x ]/Esc cancel"
     elif [ -n "$TOAST" ]; then foot="$TOAST"
     elif [ "$CONFIRM" = 1 ]; then foot="⏎ again = gracefully close window ${win_order[sel]} · any other key cancels"
     elif [ "$FOCUS" = tabs ] && [ "$BARNEW" = 1 ]; then foot="⏎ new window in '${VSESS}' · ←/→ session · ↓ into list · Esc/q close"
@@ -1326,9 +1361,31 @@ do_teleport() {
 input_start() {
   INPUT_MODE=$1; CONFIRM=0; TOAST=""
   case "$1" in
-    rename) sel_resolve; INPUT_TEXT=${__wdisp} ;;   # prefill the DISPLAYED name
-    slot)   INPUT_TEXT="" ;;                          # empty → type the target slot
+    rename)   sel_resolve; INPUT_TEXT=${__wdisp} ;;   # prefill the DISPLAYED name
+    slot)     INPUT_TEXT="" ;;                          # empty → type the target slot
+    movepick) INPUT_TEXT="" ;;                          # phone [ move ] destination picker
   esac
+}
+
+# movepick_press — a tap while the [ move ] destination picker is open (routed
+# here from handle_input_key's SGR case). On the bar: session chip = move
+# there · [ slot # ] = the classic within-session slot prompt · [ x ] = cancel.
+# Anywhere else = cancel (same contract as taps during rename/slot input).
+movepick_press() {
+  local y=$1 x=$2 i a
+  INPUT_MODE=""
+  [ "$y" = "$abar_row" ] || return 0
+  for i in "${!abar_lo[@]}"; do
+    if [ "$x" -ge "${abar_lo[i]}" ] && [ "$x" -le "${abar_hi[i]}" ]; then
+      a=${MVP_ACT[i]}
+      case "$a" in
+        -2) return 0 ;;                                # [ x ] cancel
+        -1) input_start slot; return 0 ;;              # [ slot # ]
+        *)  do_move "${MOVE_TARGETS[a]}"; return 0 ;;  # session destination
+      esac
+    fi
+  done
+  return 0
 }
 
 input_commit() {
@@ -1386,8 +1443,14 @@ handle_input_key() {
           input_cancel; return
         fi
         # a tap (SGR press) while typing = CANCEL the input — touch users have
-        # no reachable Esc; wheel/release/arrows are swallowed silently
-        case "${seqi}${cc}" in '<0;'*M) input_cancel ;; esac
+        # no reachable Esc; wheel/release/arrows are swallowed silently. In the
+        # movepick picker the tap is the SELECTION, so it routes to hit-testing.
+        case "${seqi}${cc}" in
+          '<0;'*M)
+            if [ "$INPUT_MODE" = movepick ]; then
+              j1=${seqi#<0;}; movepick_press "${j1##*;}" "${j1%%;*}"
+            else input_cancel; fi ;;
+        esac
         return
       fi
       input_cancel ;;                             # bare Esc → cancel
@@ -1396,6 +1459,8 @@ handle_input_key() {
     *)
       if [ "$INPUT_MODE" = slot ]; then
         case "$key" in [0-9]) INPUT_TEXT="${INPUT_TEXT}${key}" ;; esac   # slot: digits only
+      elif [ "$INPUT_MODE" = movepick ]; then
+        :                                                # picker: keys swallowed (Esc/⏎/tap act)
       else
         case "$key" in [[:print:]]) INPUT_TEXT="${INPUT_TEXT}${key}" ;; esac
       fi ;;
@@ -1452,6 +1517,9 @@ press() {
   if [ "$PHONE" = 1 ] && [ "$y" = "$abar_row" ]; then
     for i in "${!abar_lo[@]}"; do
       if [ "$x" -ge "${abar_lo[i]}" ] && [ "$x" -le "${abar_hi[i]}" ]; then
+        # [ move ] opens the DESTINATION PICKER instead of the bare slot
+        # prompt — sessions are tap targets there, slot # still reachable
+        if [ "$i" = $(( NACT - 3 )) ]; then CONFIRM=0; FOCUS=body; input_start movepick; return; fi
         [ "$i" != "$ACTION" ] && CONFIRM=0
         FOCUS=body; ACTION=$i; run_action; return
       fi

@@ -824,6 +824,11 @@ echo "── 21. PHONE mode: narrow-client touch layout ────────
 # sheds to [ ➕ ] + one tab + < > arrows, footer becomes tap targets, taps
 # select-then-open (two-tap). Self-contained sessions (@ccstate marks active).
 "$TMUXB" -L "$SOCK" new-session -d -s cc-ph1 -n ph-one -x 200 -y 50
+# purge every other session (earlier sections leave Claude-active leftovers,
+# and the 64-col picker drops trailing chips — targets must be deterministic)
+for __s in $("$TMUXB" -L "$SOCK" list-sessions -F '#{session_name}'); do
+  [ "$__s" = cc-ph1 ] || "$TMUXB" -L "$SOCK" kill-session -t "=$__s" 2>/dev/null
+done
 "$TMUXB" -L "$SOCK" new-window  -t cc-ph1 -n ph-two
 "$TMUXB" -L "$SOCK" set-option -w -t cc-ph1:1 @ccstate idle
 "$TMUXB" -L "$SOCK" set-option -w -t cc-ph1:2 @ccstate working
@@ -871,8 +876,17 @@ check "wide mode keeps [ ➕ NEW ]"           'printf "%s\n" "$fw" | grep -q "�
 # from the rendered frame so layout changes can't silently break the taps
 bcol() { phone cc-ph1 'q' | last_frame | grep "\[ $1 \]" | head -1 | awk -v L="[ $1 ]" '{print index($0, L) + 2}'; }
 mc=$(bcol move); rc=$(bcol ren); cc_=$(bcol close); nc=$(bcol new)
+# [ move ] → destination PICKER (2026-07-19): session chips + [ slot # ] + [ x ]
 f=$(phone cc-ph1 "\033[<0;${mc};22Mq" | last_frame)
-check "abar [ move ] tap → slot prompt"      'printf "%s\n" "$f" | grep -q "move window 1 to slot:"'
+check "[ move ] tap → destination picker"    'printf "%s\n" "$f" | grep -q "\[ cc-ph2 \].*\[ slot # \].*\[ x \]"'
+check "picker footer prompt"                 'printf "%s\n" "$f" | grep -q "where? tap a destination"'
+scol=$(printf "%s\n" "$f" | grep "\[ slot # \]" | head -1 | awk '{print index($0, "[ slot # ]") + 2}')
+tcol=$(printf "%s\n" "$f" | grep "\[ cc-ph2 \]" | head -1 | awk '{print index($0, "[ cc-ph2 ]") + 2}')
+f=$(phone cc-ph1 "\033[<0;${mc};22M\033[<0;${scol};22Mq" | last_frame)
+check "picker [ slot # ] → slot prompt"      'printf "%s\n" "$f" | grep -q "move window 1 to slot:"'
+out=$(phone cc-ph1 "\033[<0;${mc};22M\033[<0;5;6M q")
+check "picker tap-away cancels, no jump"     '! printf "%s" "$out" | grep -aq "ACTION"'
+check "picker tap-away → default footer"    'printf "%s" "$out" | last_frame | grep -q "\[ search \]"'
 f=$(phone cc-ph1 "\033[<0;${rc};22Mq" | last_frame)
 check "abar [ ren ] tap → rename prompt"     'printf "%s\n" "$f" | grep -q "rename to: ph-one"'
 f=$(phone cc-ph1 "\033[<0;${cc_};22Mq" | last_frame)
@@ -881,14 +895,19 @@ check "abar [ close ] tap 1 → confirm"       'printf "%s\n" "$f" | grep -q "ag
 # leak its CSI payload into the main loop (and error on bash 3.2's integer-only
 # read -t) — stray digits fired the jump path and CLOSED the popup. Now the
 # tap cancels the input; no jump, footer back to the default targets.
-out=$(phone cc-ph1 "\033[<0;${mc};22M\033[<0;5;6M q")
+out=$(phone cc-ph1 "\033[<0;${rc};22M\033[<0;5;6M q")
 check "tap during input: no stray jump"      '! printf "%s" "$out" | grep -aq "ACTION open"'
 check "tap during input: input cancelled"    'printf "%s" "$out" | last_frame | grep -q "\[ search \]"'
 check "tap during input: no read errors"     '! grep -q "invalid timeout" "$WORK/dash.err"'
-# [ new ] LAST — it really moves the window into a fresh session (park engine)
+# MUTATING taps last. Picker session chip really moves win1 → cc-ph2:
+out=$(phone cc-ph1 "\033[<0;${mc};22M\033[<0;${tcol};22M q")
+check "picker session chip → moves window"   'printf "%s" "$out" | grep -aq "ACTION move cc-ph1:1 cc-ph2"'
+check "window landed in cc-ph2"              '"$TMUXB" -L "$SOCK" list-windows -t cc-ph2 -F "#{window_name}" | grep -q ph-one'
+# [ new ] — really moves the (remaining) window into a fresh session
 out=$(phone cc-ph1 "\033[<0;${nc};22M")
-check "abar [ new ] tap → new session"       'printf "%s" "$out" | grep -aq "ACTION new cc-ph1:1"'
+check "abar [ new ] tap → new session"       'printf "%s" "$out" | grep -aq "ACTION new cc-ph1:"'
 "$TMUXB" -L "$SOCK" kill-session -t ph-one 2>/dev/null
+"$TMUXB" -L "$SOCK" kill-session -t ph-two 2>/dev/null
 "$TMUXB" -L "$SOCK" kill-session -t cc-ph1 2>/dev/null
 "$TMUXB" -L "$SOCK" kill-session -t cc-ph2 2>/dev/null
 
