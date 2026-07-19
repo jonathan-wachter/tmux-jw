@@ -1,6 +1,6 @@
 #!/bin/bash
-# tmux-pipelines-ticker.sh — ensure a detached 'wraps' session is running the
-# session-pipelines lifecycle ticker (`pipelines trace -f`), so the journal of
+# tmux-wraps-ticker.sh — ensure a detached 'wraps' session is running the
+# session-wraps lifecycle ticker (`wraps trace -f`), so the journal of
 # hook → enqueue → run → notify is always one cockpit hop (prefix+o) or
 # `tmux attach -t wraps` away.
 #
@@ -15,10 +15,10 @@
 # (exactly what happened on first deploy, 2026-07-15).
 
 SESSION="wraps"
-PIPELINES="$HOME/projects/session-pipelines/bin/pipelines"
+WRAPS="$HOME/projects/session-wraps/bin/wraps"
 
-[ -x "$PIPELINES" ] || exit 0                       # facility not installed → no-op
+[ -x "$WRAPS" ] || exit 0                       # facility not installed → no-op
 tmux has-session -t "=$SESSION" 2>/dev/null && exit 0
 
 tmux new-session -d -s "$SESSION" -n trace \
-  "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin exec '$PIPELINES' trace -f"
+  "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin exec '$WRAPS' trace -f"

@@ -19,6 +19,6 @@
 #TMUXJW_TMUX_BIN=/opt/homebrew/bin/tmux
 
 # Red "P?" badge on Claude windows with no project association (set via the
-# session-pipelines `assoc` workflow). auto = show only when the assoc state
-# dir (~/projects/session-pipelines/state/assoc) exists; force with 1 or 0.
+# session-wraps `assoc` workflow). auto = show only when the assoc state
+# dir (~/projects/session-wraps/state/assoc) exists; force with 1 or 0.
 #TMUXJW_PROJ_MARKER=auto

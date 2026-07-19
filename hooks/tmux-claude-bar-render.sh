@@ -271,13 +271,13 @@ __cfg="${BASH_SOURCE[0]%/*}/../tmux-jw.config"
 [ -r "$__cfg" ] && . "$__cfg"
 [ -n "$__env_pm" ] && TMUXJW_PROJ_MARKER="$__env_pm"
 # P? MARKER GATE: the red P? badge flags Claude windows with no `! assoc`
-# project association — meaningless without the session-pipelines assoc
+# project association — meaningless without the session-wraps assoc
 # workflow, where it would brand EVERY window forever. auto (default) = on
 # only when the assoc state dir exists; force with 1/0.
 case "${TMUXJW_PROJ_MARKER:-auto}" in
   1|on)  PMARK=1;;
   0|off) PMARK=0;;
-  *)     if [ -d "$HOME/projects/session-pipelines/state/assoc" ]; then PMARK=1; else PMARK=0; fi;;
+  *)     if [ -d "$HOME/projects/session-wraps/state/assoc" ]; then PMARK=1; else PMARK=0; fi;;
 esac
 
 # ── gather THIS session's windows (RAW — cells are built later, once the

@@ -806,14 +806,14 @@ echo "── 20. reconciler republishes @ccproj from the assoc file ────
 # must re-derive it every tick from state/assoc/<sessionId> (tail -1 = current)
 # — and clear it when the file goes away (assoc --clear).
 prpid=$("$TMUXB" -L "$SOCK" list-panes -t cc-pq -F '#{pane_pid}' | head -1)
-H6="$WORK/prhome"; mkdir -p "$H6/.claude/sessions" "$H6/projects/session-pipelines/state/assoc"
+H6="$WORK/prhome"; mkdir -p "$H6/.claude/sessions" "$H6/projects/session-wraps/state/assoc"
 printf '{"kind":"interactive","status":"busy","sessionId":"prsid"}' > "$H6/.claude/sessions/$prpid.json"
-printf 'life-os\ntmux\n' > "$H6/projects/session-pipelines/state/assoc/prsid"
+printf 'life-os\ntmux\n' > "$H6/projects/session-wraps/state/assoc/prsid"
 "$TMUXB" -L "$SOCK" set-option -pq -t cc-pq:1 -u @ccproj
 HOME="$H6" PATH="$SHIM:$PATH" TMPDIR="$WORK" bash hooks/tmux-claude-reconcile.sh >/dev/null 2>&1
 pj=$("$TMUXB" -L "$SOCK" show-option -pqv -t cc-pq:1 @ccproj)
 check "wiped @ccproj re-published (tail -1)" '[ "$pj" = tmux ]'
-rm -f "$H6/projects/session-pipelines/state/assoc/prsid"
+rm -f "$H6/projects/session-wraps/state/assoc/prsid"
 HOME="$H6" PATH="$SHIM:$PATH" TMPDIR="$WORK" bash hooks/tmux-claude-reconcile.sh >/dev/null 2>&1
 pj=$("$TMUXB" -L "$SOCK" show-option -pqv -t cc-pq:1 @ccproj)
 check "assoc file gone → @ccproj cleared"   '[ -z "$pj" ]'

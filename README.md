@@ -22,7 +22,7 @@ Tab titles size **dynamically**: full window names whenever they fit, then a sha
 | 🟠 | **Stalled** — claims busy but the pane hasn't painted in 3+ min (watchdog) |
 | ✅ | **Done** while you were away (auto-clears when you focus the pane) |
 | _(none)_ | idle |
-| `P?` (red) | Window's Claude session has **no project association** — persistent until you `assoc` a project. Off by default unless the [session-pipelines](https://github.com/jonathan-wachter) assoc workflow is installed (`TMUXJW_PROJ_MARKER`). |
+| `P?` (red) | Window's Claude session has **no project association** — persistent until you `assoc` a project. Off by default unless the [session-wraps](https://github.com/jonathan-wachter) assoc workflow is installed (`TMUXJW_PROJ_MARKER`). |
 
 ## Features
 

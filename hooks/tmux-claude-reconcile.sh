@@ -32,7 +32,7 @@ REG_DIR="$HOME/.claude/sessions"
 # `! assoc` writes the authoritative session→project mapping here (one file per
 # sessionId, append-only slug history; LAST line = current). $HOME-relative so
 # the test harness's fake-HOME trick covers it too.
-ASSOC_DIR="$HOME/projects/session-pipelines/state/assoc"
+ASSOC_DIR="$HOME/projects/session-wraps/state/assoc"
 STALL_SECS=180   # busy + no pane output for this long = stalled
 # Recap-harvest mtime stamps (P3, 2026-07-08): one file per sessionId recording
 # the transcript mtime we last harvested, so an UNCHANGED transcript skips the
