@@ -17,7 +17,7 @@ These override or add to stock tmux — the reason each exists is in `tmux.conf`
 | Key / Option | Effect | Why |
 |---|---|---|
 | `C-k g` | Jump to the Claude session that needs you most (🔴 > 💬 > 🟠 > ✅) | `tmux-claude-jump.sh` — attention router across sessions |
-| `C-k o` | **Cockpit popup** (v3.4, 2026-07-16): header bar = a `[ ➕ NEW ]` button in its own section at the left (tap it, or `←` past the first tab + `⏎`, to create a window in the *viewed* session), the Claude-active session tabs (`↑` reaches the bar, blue when focused; `←/→`/tap browse another session *without leaving yours*), and a `[ ❌ CLOSE ]` button top-right; each window is a flush-left `N) name ────` entry with its recap below; on the selected entry `←/→` walk the **control chips** (only text inside `❯ ❮` highlighted, accelerator letter underlined) — `open` · one chip per other Claude session (move there; `cc-parking` always offered) · **(n)ew session** (spin window into a fresh session) · **(m)ove** (teleport to an absolute slot, like `C-k .`) · **(r)ename** (inline-edit the name) · **(c)lose** (red, two-step confirm, graceful `/exit`; closing a session's *last* window first lands your client in the most-recently-active other session instead of kicking you out of tmux); n/m/r/c are direct accelerators · `⏎` run/open · `.` **global cross-session search** (type to filter windows across all sessions, shown with `· session` suffix; stays until Esc) · `t` sort · `s` **new blank session** (`cc-mmdd`, sized to your client) · `?` **tmux key-binding help** (live filterable 2-col reference of the prefix bindings; `↑↓←→`/tap select a binding, `⏎` runs it as if typed, Esc closes) · number to jump · `q`/`Esc` close | `tmux-claude-dashboard-open.sh`; dropdown under the bar; full-screen on iPhone; shadows stock o (next pane) |
+| `C-k o` / `C-k m` | **Cockpit popup** (v3.4, 2026-07-16): header bar = a `[ ➕ NEW ]` button in its own section at the left (tap it, or `←` past the first tab + `⏎`, to create a window in the *viewed* session), the Claude-active session tabs (`↑` reaches the bar, blue when focused; `←/→`/tap browse another session *without leaving yours*), and a `[ ❌ CLOSE ]` button top-right; each window is a flush-left `N) name ────` entry with its recap below; on the selected entry `←/→` walk the **control chips** (only text inside `❯ ❮` highlighted, accelerator letter underlined) — `open` · one chip per other Claude session (move there; `cc-parking` always offered) · **(n)ew session** (spin window into a fresh session) · **(m)ove** (teleport to an absolute slot, like `C-k .`) · **(r)ename** (inline-edit the name) · **(c)lose** (red, two-step confirm, graceful `/exit`; closing a session's *last* window first lands your client in the most-recently-active other session instead of kicking you out of tmux); n/m/r/c are direct accelerators · `⏎` run/open · `.` **global cross-session search** (type to filter windows across all sessions, shown with `· session` suffix; stays until Esc) · `t` sort · `s` **new blank session** (`cc-mmdd`, sized to your client) · `?` **tmux key-binding help** (live filterable 2-col reference of the prefix bindings; `↑↓←→`/tap select a binding, `⏎` runs it as if typed, Esc closes) · number to jump · `q`/`Esc` close | `tmux-claude-dashboard-open.sh`; dropdown under the bar; full-screen on iPhone; shadows stock o (next pane). **PHONE mode** (client < 72 cols, 2026-07-19): touch-first layout — divider chips move to a pinned **action bar** above the footer (`[ open ] [ new ] [ move ] [ ren ] [ close ]`, big tap targets), taps **select-then-open** (first tap moves the cursor, second tap on the same entry opens), header sheds to `[ ➕ ] │ < sess > i/n │` (tap `<`/`>` = prev/next session) + `[ ❌ ]`, footer = `[ search ] [ sort ] [ + session ] [ ? ]` tap targets, horizontal wheel (Moshi sideways swipe, SGR btn 66/67) cycles sessions; all keyboard keys unchanged. Input debug: `touch ~/.config/tmux-jw/dashboard-debug` → raw key/mouse log at `/tmp/tmux-jw-dash-debug.log` |
 | `C-k b` | Toggle the boxbar: 3-line box ribbon ⇆ 1-line compact | `tmux-claude-bar.sh toggle` |
 | `C-k R` | **Restore** every Claude session that crashed/died (`claude --resume` in rebuilt windows) | `tmux-claude-restore.sh`; additive + idempotent. Fallback: `cc-restore`. Complements `C-k C-r` (which restores tmux layout, not the Claude processes) |
 | `C-k <` | Move the current window one slot **left** (repeatable; focus follows) | `swap-window -t -1 \; previous-window`, `-r` |
@@ -29,7 +29,7 @@ These override or add to stock tmux — the reason each exists is in `tmux.conf`
 | *Shift+Enter* | Sends `\x1b[13;2u` through tmux to Claude Code (newline-in-prompt) | `extended-keys always` + `csi-u` |
 | *Auto-restore* | Sessions autosave every 5 min and restore on tmux start / after Mac reboot | tmux-continuum |
 
-> 💡 `C-k g`, `C-k o`, and `C-k b` are **not** stock tmux bindings — they're yours (`o` replaces stock next-pane; `w` is back to the stock window chooser). `C-k C-s` / `C-k C-r` come from the tmux-resurrect plugin.
+> 💡 `C-k g`, `C-k o`/`C-k m`, and `C-k b` are **not** stock tmux bindings — they're yours (`o` replaces stock next-pane and `m` stock mark-pane, both opening the cockpit; `w` is back to the stock window chooser). `C-k C-s` / `C-k C-r` come from the tmux-resurrect plugin.
 
 ---
 
@@ -61,6 +61,7 @@ These override or add to stock tmux — the reason each exists is in `tmux.conf`
 | `C-k "` | Split **vertically** → top / bottom |
 | `C-k x` | Kill the active pane |
 | `C-k o` | ~~Select the next pane~~ **overridden** → cockpit popup (see custom table above) |
+| `C-k m` | ~~Mark the active pane~~ **overridden** → cockpit popup (see custom table above) |
 | `C-k ;` | Jump to the previously active pane (toggle back) |
 | `C-k ↑ ↓ ← →` | Select pane in that direction |
 | `C-k q` | Display pane numbers (then press one to jump) |
@@ -69,7 +70,7 @@ These override or add to stock tmux — the reason each exists is in `tmux.conf`
 | `C-k }` | Swap active pane with the one **below** |
 | `C-k C-o` | Rotate through panes |
 | `C-k M-o` | Rotate through panes in **reverse** |
-| `C-k m` | Toggle the **marked** pane |
+| `C-k m` | ~~Toggle the **marked** pane~~ **overridden** → cockpit popup (see custom table above) |
 | `C-k M` | Clear the marked pane |
 | `C-k E` | Spread panes out evenly |
 | `C-k >` | Display the pane menu |

@@ -819,6 +819,53 @@ pj=$("$TMUXB" -L "$SOCK" show-option -pqv -t cc-pq:1 @ccproj)
 check "assoc file gone → @ccproj cleared"   '[ -z "$pj" ]'
 "$TMUXB" -L "$SOCK" kill-session -t cc-pq 2>/dev/null
 
+echo "── 21. PHONE mode: narrow-client touch layout ─────────────────────"
+# cols<72 → PHONE=1: chips leave the divider for a pinned action bar, header
+# sheds to [ ➕ ] + one tab + < > arrows, footer becomes tap targets, taps
+# select-then-open (two-tap). Self-contained sessions (@ccstate marks active).
+"$TMUXB" -L "$SOCK" new-session -d -s cc-ph1 -n ph-one -x 200 -y 50
+"$TMUXB" -L "$SOCK" new-window  -t cc-ph1 -n ph-two
+"$TMUXB" -L "$SOCK" set-option -w -t cc-ph1:1 @ccstate idle
+"$TMUXB" -L "$SOCK" set-option -w -t cc-ph1:2 @ccstate working
+"$TMUXB" -L "$SOCK" set-option -w -t cc-ph1:1 @ccrecap "a recap line for the phone tests"
+"$TMUXB" -L "$SOCK" new-session -d -s cc-ph2 -n ph-solo -x 200 -y 50
+"$TMUXB" -L "$SOCK" set-option -w -t cc-ph2:1 @ccstate idle
+phone() { printf "$2" | JW_DASH_TEST=1 JW_DASH_COLS=64 JW_DASH_ROWS=24 \
+  JW_TMUX="$TMUXB -L $SOCK" TMPDIR="$WORK" JW_DASH_PARKING=cc-parked \
+  bash hooks/tmux-claude-dashboard.sh "$1" 1 2>>"$WORK/dash.err"; }
+f=$(phone cc-ph1 'q' | last_frame)
+check "phone header: icon-only [ ➕ ]"       'printf "%s\n" "$f" | head -1 | grep -q "\[ ➕ \]"'
+check "phone header: no [ ➕ NEW ]"          '! printf "%s\n" "$f" | grep -q "➕ NEW"'
+check "phone header: < name > arrows"        'printf "%s\n" "$f" | head -1 | grep -q "< *cc-ph1 *>"'
+check "phone divider: no inline chips"       '! printf "%s\n" "$f" | grep -q "❯ open ❮"'
+check "phone action bar: open + close"       'printf "%s\n" "$f" | grep -q "\[ open \].*\[ close \]"'
+check "phone footer: tap targets"            'printf "%s\n" "$f" | grep -q "\[ search \].*\[ + session \]"'
+fr=$(phone cc-ph1 'q' | last_frame_raw)
+check "phone selected title = REV cursor"    '[[ "$fr" == *"${REV_SEQ}${BOLD_SEQ}"*"ph-one"* ]]'
+# two-tap: window 2's header row (win1 header row3 + 1 recap line → row 5);
+# first tap only SELECTS (no ACTION open), the second tap on the same row opens
+out=$(phone cc-ph1 '\033[<0;5;5Mq')
+check "phone tap 1: selects, no open"        '! printf "%s" "$out" | grep -aq "ACTION open"'
+check "phone tap 1: cursor moved to ph-two"  '[[ "$(printf "%s" "$out" | last_frame_raw)" == *"${REV_SEQ}${BOLD_SEQ}"*"ph-two"* ]]'
+out=$(phone cc-ph1 '\033[<0;5;5M\033[<0;5;5M')
+check "phone tap 2: same row opens"          'printf "%s" "$out" | grep -aq "ACTION open cc-ph1:2"'
+# action bar: ↑-arm walk skips hidden session-move indices (open→new→move…),
+# and a tap on the bar's [ open ] span opens the selected window
+fr=$(phone cc-ph1 '\033[C\033[Cq' | last_frame_raw)
+check "phone ←/→ walk: 2×→ arms [ move ]"    '[[ "$fr" == *"${REV_SEQ}${BOLD_SEQ}[ move ]"* ]]'
+ocol=$(phone cc-ph1 'q' | last_frame | grep -n "\[ open \]" | head -1 | awk -F: '{print index($2 ":" $3, "[ open ]")}')
+check "phone abar tap on [ open ] opens"     'printf "%s" "$(phone cc-ph1 "\033[<0;$(( ocol + 2 ));22M")" | grep -aq "ACTION open cc-ph1:1"'
+# horizontal wheel (SGR btn 67) → next session; header line 1 changes
+h1=$(phone cc-ph1 'q' | last_frame | head -1)
+h2=$(phone cc-ph1 '\033[<67;5;10Mq' | last_frame | head -1)
+check "phone wheel-right → other session"    '[ "$h1" != "$h2" ]'
+# wide mode untouched: same session at 110 cols still renders inline chips
+fw=$(dash cc-ph1 1 'q' | last_frame)
+check "wide mode keeps divider chips"        'printf "%s\n" "$fw" | grep -q "❯ open ❮"'
+check "wide mode keeps [ ➕ NEW ]"           'printf "%s\n" "$fw" | grep -q "➕ NEW"'
+"$TMUXB" -L "$SOCK" kill-session -t cc-ph1 2>/dev/null
+"$TMUXB" -L "$SOCK" kill-session -t cc-ph2 2>/dev/null
+
 echo "──────────────────────────────────────────────────────────────────"
 printf 'RESULT: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ]

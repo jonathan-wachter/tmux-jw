@@ -188,8 +188,17 @@ else
   # the input caret in rename/slot, so the real cursor is pure noise here.
   saved_stty=$(stty -g < /dev/tty 2>/dev/null)
   stty -icanon -echo -icrnl < /dev/tty 2>/dev/null   # -icrnl: keep Enter as CR, not NL (else read -n1 eats it)
-  printf '\033[?1000h\033[?1006h\033[?25l' > /dev/tty
-  trap 'printf "\033[?1006l\033[?1000l\033[?25h" > /dev/tty; [ -n "$saved_stty" ] && stty "$saved_stty" < /dev/tty 2>/dev/null' EXIT
+  # DISABLE auto-wrap (DECAWM, \033[?7l): the popup is a fixed rows×cols grid
+  # drawn with explicit \n and absolute cursor moves — it never RELIES on wrap.
+  # But a body line that measures wider than cols in THIS terminal (e.g. the
+  # selected window's chip strip, whose ❯/❮ ornaments are 1 cell on the desktop
+  # but 2 cells in iOS terminals) would soft-wrap to a second physical row,
+  # overflowing the grid by a line and scrolling the whole frame up — which
+  # clipped the pinned header. With wrap off the terminal truncates the over-long
+  # line at the right margin instead, so frame height stays exactly `rows`.
+  # Restored on exit alongside the mouse/cursor modes.
+  printf '\033[?7l\033[?1000h\033[?1006h\033[?25l' > /dev/tty
+  trap 'printf "\033[?7h\033[?1006l\033[?1000l\033[?25h" > /dev/tty; [ -n "$saved_stty" ] && stty "$saved_stty" < /dev/tty 2>/dev/null' EXIT
 fi
 
 # apply_dims — recompute every layout value that depends on cols/rows. Called
@@ -201,11 +210,18 @@ fi
 #   RULE     : full-width divider string
 #   view_h   : body height = rows minus header(2) + footer(2)
 apply_dims() {
+  # PHONE mode (2026-07-19): a narrow client is touch-first — the selected
+  # window's chips leave the divider for a pinned ACTION BAR above the footer,
+  # the header sheds to icon + one tab + < > arrows, the footer legend becomes
+  # tap targets, and taps select-then-open (two-tap). Gate is width-only (a
+  # narrow desktop split benefits too); JW_DASH_PHONE=0/1 forces it (tests).
+  PHONE=0; [ "$cols" -lt 72 ] && PHONE=1
+  [ -n "$JW_DASH_PHONE" ] && PHONE=$JW_DASH_PHONE
   if [ "$cols" -lt 90 ]; then ind=" ";  hang=3; wrap=$(( cols - 4 ))
   else                        ind="  "; hang=4; wrap=$(( cols - 6 )); fi
   [ "$wrap" -lt 20 ] && wrap=20
   RULE=$(printf '─%.0s' $(seq 1 "$cols"))
-  view_h=$(( rows - 4 )); [ "$view_h" -lt 3 ] && view_h=3
+  view_h=$(( rows - 4 - PHONE )); [ "$view_h" -lt 3 ] && view_h=3   # phone: 1 row → action bar
 }
 apply_dims
 
@@ -465,8 +481,46 @@ new_lo=0; new_hi=0                # click span of the [ ➕ NEW ] button
 # distinct tab band) — the tabs read as their own region via the │ emitted below,
 # the header rule's ┴ junction at hdr_bound, and the popup's own border.
 SHADE=$'\033[48;2;181;188;200m'
+# PHONE header (2026-07-19): ` [ ➕ ] │ < ❮sess❯ > i/n │` — icon-only NEW, ONLY
+# the viewed session's tab, ASCII `<`/`>` arrows as prev/next-session tap
+# targets (recorded in tab_lo/hi with SENTINEL tab_of values −1/−2; the name
+# span is −3 = drop into the list), and an i/n count when there are ≥2 sessions.
+# Keyboard hints are dropped — chrome this small is for touch. ASCII arrows on
+# purpose: ‹›❯❮ are ambiguous-width (2 cells in iOS terminals — the header-clip
+# bug), so phone chrome avoids them; tap columns must be exact.
+build_header_phone() {
+  local sv nst tst name cnt="" maxn col styled
+  sview; sv=$__sv
+  nst="$BOLD"; [ "$FOCUS" = tabs ] && [ "$BARNEW" = 1 ] && nst="${TABFOC}${BOLD}"
+  styled="${SHADE} ${nst}[ ➕ ]${RESET}${SHADE} ${RESET}${SLATE}│${RESET}${SHADE} "
+  new_lo=2; new_hi=7              # "[ ➕ ]" = 6 cells (➕ is 2), cols 2-7
+  hdr_bound0=9
+  col=11                          # first cell after "│ "
+  [ "$nsess" -gt 1 ] && cnt="$(( sv + 1 ))/${nsess}"
+  name=${SESS_LIST[sv]}
+  maxn=$(( cols - 8 - col - ${#cnt} - 8 ))   # room minus [ ❌ ] zone, arrows, pads
+  [ "$maxn" -lt 4 ] && maxn=4
+  [ ${#name} -gt "$maxn" ] && name="${name:0:$(( maxn - 1 ))}…"
+  if [ "$FOCUS" = tabs ] && [ "$BARNEW" = 0 ]; then tst="${TABFOC}${BOLD}"
+  else                                              tst="${REV}${BOLD}"; fi
+  tab_lo=("$col");           tab_hi=("$col");                       tab_of=(-1)   # <  prev
+  styled="${styled}${BOLD}<${RESET}${SHADE} "
+  col=$(( col + 2 ))
+  tab_lo+=("$col");          tab_hi+=($(( col + ${#name} + 1 )));   tab_of+=(-3)  # name → list
+  styled="${styled}${tst} ${name} ${RESET}${SHADE} "
+  col=$(( col + ${#name} + 3 ))
+  tab_lo+=("$col");          tab_hi+=("$col");                      tab_of+=(-2)  # >  next
+  styled="${styled}${BOLD}>${RESET}${SHADE}"
+  col=$(( col + 1 ))
+  [ -n "$cnt" ] && { styled="${styled} ${MUTED}${cnt}${RESET}${SHADE}"; col=$(( col + ${#cnt} + 1 )); }
+  styled="${styled} ${RESET}${SLATE}│${RESET}"
+  hdr_bound=$(( col + 1 ))
+  hdr_out=$styled
+}
+
 build_header() {
   tab_lo=(); tab_hi=(); tab_of=(); hdr_out=""; hdr_bound=0
+  [ "$PHONE" = 1 ] && { build_header_phone; return; }
   local budget=$(( cols - 14 ))   # keep the top-right [ ❌ CLOSE ] zone clear (12 cells + margin)
   local i lab lw col start=0 sv plain="" styled="${SHADE} "
   sview; sv=$__sv
@@ -567,8 +621,11 @@ draw_entry_rule() {
   mk=""; [ "$w" = "$active_win" ] && mk="•"
   gx=0; [ -n "$gph" ] && gx=1                     # status emoji = 2 cells, 1 char
   tw=$(( ${#mk} + ${#title} + gx ))
-  if [ "$sel_here" = 0 ]; then
-    # layout: TITLE + ' ' + dashes-to-edge  (total == cols)
+  if [ "$sel_here" = 0 ] || [ "$PHONE" = 1 ]; then
+    # layout: TITLE + ' ' + dashes-to-edge  (total == cols). PHONE mode renders
+    # the SELECTED entry this way too — REV title marks the cursor, and its
+    # actions live in the pinned action bar (draw_abar), not divider chips.
+    local tst="$BOLD"; [ "$sel_here" = 1 ] && tst="${REV}${BOLD}"
     fillw=$(( cols - tw - 1 ))
     if [ "$fillw" -lt 0 ]; then
       keep=$(( ${#title} + fillw - 1 )); [ "$keep" -lt 4 ] && keep=4
@@ -576,7 +633,7 @@ draw_entry_rule() {
       fillw=$(( cols - tw - 1 )); [ "$fillw" -lt 0 ] && fillw=0
     fi
     printf -v fill '%*s' "$fillw" ''; fill=${fill// /─}
-    printf '%s%s%s%s %s%s%s\n' "$mk" "$BOLD" "$title" "$RESET" "$SEPC" "$fill" "$RESET"
+    printf '%s%s%s%s %s%s%s\n' "$mk" "$tst" "$title" "$RESET" "$SEPC" "$fill" "$RESET"
     return
   fi
   # SELECTED: build the chip strip — open · move-to-session targets · new
@@ -651,6 +708,45 @@ draw_entry_rule() {
   printf '%s\n' "$styled"
 }
 
+# ── PHONE action bar (2026-07-19) ────────────────────────────────────────────
+# One full-width row above the footer rule with the SELECTED window's actions as
+# big tap targets: [ open ] [ new ] [ move ] [ ren ] [ close ], evenly spread so
+# each target is finger-sized. Same LOGICAL action indices as the divider chips
+# (open=0 · new=NACT−4 · move=NACT−3 · rename=NACT−2 · close=NACT−1); the
+# session-move chips don't fit here — that verb stays on keyboard/wide mode
+# (and `move` still reaches any slot). Spans → abar_lo/abar_hi (keyed by
+# logical index) + abar_row for press(). ASCII [ ] frames on purpose (no ❯❮ —
+# ambiguous-width, 2 cells in iOS terminals; tap columns must be exact).
+abar_lo=(); abar_hi=(); abar_row=0
+draw_abar() {
+  abar_lo=(); abar_hi=(); abar_row=$(( rows - 2 ))
+  [ "$nwin" -le 0 ] && { printf '\n'; return; }    # nothing selected → keep geometry
+  local labels=(open new move ren close)
+  local aidx=(0 $(( NACT - 4 )) $(( NACT - 3 )) $(( NACT - 2 )) $(( NACT - 1 )))
+  local i lbl a st col lead gap used=0 pad styled=""
+  [ "$CONFIRM" = 1 ] && labels[4]="close?"
+  for i in 0 1 2 3 4; do used=$(( used + ${#labels[i]} + 4 )); done   # each "[ lbl ]"
+  gap=$(( (cols - used) / 6 )); [ "$gap" -lt 0 ] && gap=0
+  lead=$(( (cols - used - gap * 4) / 2 )); [ "$lead" -lt 0 ] && lead=0
+  printf -v styled '%*s' "$lead" ''; col=$(( lead + 1 ))
+  for i in 0 1 2 3 4; do
+    lbl=${labels[i]}; a=${aidx[i]}
+    if [ "$a" = "$ACTION" ] && [ "$FOCUS" = body ]; then
+      if [ "$i" = 4 ]; then st="${REDCH}${BOLD}"; else st="${REV}${BOLD}"; fi
+    elif [ "$i" = 4 ]; then st="$REDFG"
+    else                    st="$MUTED"; fi
+    abar_lo[a]=$col; abar_hi[a]=$(( col + ${#lbl} + 3 ))
+    styled="${styled}${st}[ ${lbl} ]${RESET}"
+    col=$(( col + ${#lbl} + 4 ))
+    if [ "$i" -lt 4 ]; then printf -v pad '%*s' "$gap" ''; styled="${styled}${pad}"; col=$(( col + gap )); fi
+  done
+  printf '%s\n' "$styled"
+}
+
+# PHONE footer tap targets (registered only when the DEFAULT footer renders;
+# input/toast/confirm footers leave the arrays empty → taps there are inert)
+foot_lo=(); foot_hi=(); foot_verb=()
+
 draw() {
   if [ "$HELP_ON" = 1 ]; then draw_help; return; fi
   {
@@ -691,10 +787,12 @@ draw() {
       shown=$((shown+1))
     done
     for (( j = shown; j < view_h; j++ )); do printf '\n'; done     # pad so the footer sits at the bottom
+    [ "$PHONE" = 1 ] && draw_abar                     # phone: pinned action bar row
     printf '%s%s%s\n' "$SLATE" "$RULE" "$RESET"       # rule above the footer
     # footer: input-mode prompt (highest priority) · then a transient TOAST ·
-    # then focus/confirm-aware hints
-    local foot
+    # then focus/confirm-aware hints (wide) or tap targets (phone)
+    local foot fseg fcol fi
+    foot_lo=(); foot_hi=(); foot_verb=()
     if [ "$SEARCH_ON" = 1 ]; then foot="search: ${SEARCH_Q}▌  (${nwin} results across all sessions · ↑↓ pick · ⏎ open · Esc close search)"
     elif [ "$INPUT_MODE" = rename ]; then foot="rename to: ${INPUT_TEXT}▌  (⏎ save · Esc cancel)"
     elif [ "$INPUT_MODE" = slot ]; then foot="move window ${win_order[sel]} to slot: ${INPUT_TEXT}▌  (⏎ go · Esc cancel)"
@@ -702,12 +800,25 @@ draw() {
     elif [ "$CONFIRM" = 1 ]; then foot="⏎ again = gracefully close window ${win_order[sel]} · any other key cancels"
     elif [ "$FOCUS" = tabs ] && [ "$BARNEW" = 1 ]; then foot="⏎ new window in '${VSESS}' · ←/→ session · ↓ into list · Esc/q close"
     elif [ "$FOCUS" = tabs ]; then foot="←/→ switch session · ↓ into list · ⇥ commit · Esc/q close"
+    elif [ "$PHONE" = 1 ]; then
+      # phone default footer: tappable verbs (the keyboard legend is useless on
+      # touch and never fit anyway); spans registered for press()
+      local fsegs=("search" "sort:${sort_mode}" "+ session" "?")
+      local fverbs=(search sort newsess help)
+      foot=""; fcol=1
+      for fi in 0 1 2 3; do
+        fseg="[ ${fsegs[fi]} ]"
+        foot_lo+=("$fcol"); foot_hi+=($(( fcol + ${#fseg} - 1 ))); foot_verb+=("${fverbs[fi]}")
+        foot="${foot}${fseg} "
+        fcol=$(( fcol + ${#fseg} + 1 ))
+      done
     else foot="(n)ew · (m)ove · (r)ename · (c)lose · (.) search · (t) sort:${sort_mode} · (s) new session · (?) tmux help · Esc/q"; fi
     [ ${#foot} -gt "$cols" ] && foot=${foot:0:$cols}
     printf '%s%s%s' "$MUTED" "$foot" "$RESET"
-    # tappable [ ❌ CLOSE ] button, top-right corner (12 cells, ends at cols-1);
-    # then park the cursor at the bottom
-    printf '\033[1;%dH%s[ ❌ CLOSE ]%s\033[%d;1H' $(( cols - 12 )) "$BOLD" "$RESET" "$rows"
+    # tappable close button, top-right corner ([ ❌ ] = 6 cells on the phone,
+    # [ ❌ CLOSE ] = 12 wide); then park the cursor at the bottom
+    if [ "$PHONE" = 1 ]; then printf '\033[1;%dH%s[ ❌ ]%s\033[%d;1H' $(( cols - 6 )) "$BOLD" "$RESET" "$rows"
+    else printf '\033[1;%dH%s[ ❌ CLOSE ]%s\033[%d;1H' $(( cols - 12 )) "$BOLD" "$RESET" "$rows"; fi
   } > "$TTY_OUT"
 }
 
@@ -922,8 +1033,22 @@ bar_move() {
   if [ "$p" -eq 0 ]; then BARNEW=1
   else BARNEW=0; view_session "=$(( p - 1 ))"; fi
 }
-k_left()  { if [ "$FOCUS" = tabs ]; then bar_move -1; else CONFIRM=0; [ "$ACTION" -gt 0 ] && ACTION=$((ACTION-1)); fi; }
-k_right() { if [ "$FOCUS" = tabs ]; then bar_move  1; else CONFIRM=0; [ "$ACTION" -lt $(( NACT - 1 )) ] && ACTION=$((ACTION+1)); fi; }
+# arm_step: ←/→ walk the armed action. PHONE shows only the 5 bar verbs, so the
+# walk hops open → new → move → rename → close, skipping the (hidden)
+# session-move indices; wide mode keeps the plain ±1 walk over every chip.
+arm_step() {
+  if [ "$PHONE" != 1 ]; then
+    if [ "$1" -gt 0 ]; then [ "$ACTION" -lt $(( NACT - 1 )) ] && ACTION=$(( ACTION + 1 ))
+    else                    [ "$ACTION" -gt 0 ] && ACTION=$(( ACTION - 1 )); fi
+    return
+  fi
+  local seq=(0 $(( NACT - 4 )) $(( NACT - 3 )) $(( NACT - 2 )) $(( NACT - 1 ))) i p=0
+  for i in 0 1 2 3 4; do [ "${seq[i]}" -le "$ACTION" ] && p=$i; done
+  p=$(( p + $1 )); (( p < 0 )) && p=0; (( p > 4 )) && p=4
+  ACTION=${seq[p]}
+}
+k_left()  { if [ "$FOCUS" = tabs ]; then bar_move -1; else CONFIRM=0; arm_step -1; fi; }
+k_right() { if [ "$FOCUS" = tabs ]; then bar_move  1; else CONFIRM=0; arm_step  1; fi; }
 # Tab / Shift-Tab: switch session from anywhere and COMMIT into the list on the
 # active window (keeps the pre-existing ⇥ behavior; absorbs the old ←/→ switch).
 k_tab()   { view_session "$1"; FOCUS=body; BARNEW=0; ACTION=0; CONFIRM=0; }
@@ -1278,21 +1403,56 @@ cycle_sort() {
 #   rows 3..rows-2 = window rows (dividers tap through to their window) ·
 #   rows-1/rows = footer chrome (inert)
 press() {
-  local y=$1 x=$2 i idx
+  local y=$1 x=$2 i idx cw p
   [ "$y" -ge 1 ] 2>/dev/null || return
   if [ "$y" -le 1 ]; then
-    [ "$x" -ge $(( cols - 12 )) ] 2>/dev/null && exit 0           # [ ❌ CLOSE ]
+    cw=12; [ "$PHONE" = 1 ] && cw=6
+    [ "$x" -ge $(( cols - cw )) ] 2>/dev/null && exit 0           # [ ❌ CLOSE ] / [ ❌ ]
     if [ "$x" -ge "$new_lo" ] 2>/dev/null && [ "$x" -le "$new_hi" ]; then
-      do_newwindow; return                                        # [ ➕ NEW ]
+      do_newwindow; return                                        # [ ➕ NEW ] / [ ➕ ]
     fi
     for (( i=0; i<${#tab_lo[@]}; i++ )); do
       if [ "$x" -ge "${tab_lo[i]}" ] && [ "$x" -le "${tab_hi[i]}" ]; then
-        view_session "=${tab_of[i]}"; return
+        case "${tab_of[i]}" in
+          -1) view_session -1 ;;                # phone: < = previous session
+          -2) view_session  1 ;;                # phone: > = next session
+          -3) FOCUS=body; ACTION=0; CONFIRM=0 ;;   # phone: name tap = into the list
+          *)  view_session "=${tab_of[i]}" ;;
+        esac
+        return
       fi
     done
     return
   fi
-  [ "$y" -ge $(( rows - 1 )) ] && return                           # footer chrome: inert
+  # phone: the pinned action bar (row rows-2) — tap arms + runs (close taps
+  # twice through the red confirm, exactly like the wide-mode chips)
+  if [ "$PHONE" = 1 ] && [ "$y" = "$abar_row" ]; then
+    for i in "${!abar_lo[@]}"; do
+      if [ "$x" -ge "${abar_lo[i]}" ] && [ "$x" -le "${abar_hi[i]}" ]; then
+        [ "$i" != "$ACTION" ] && CONFIRM=0
+        FOCUS=body; ACTION=$i; run_action; return
+      fi
+    done
+    return
+  fi
+  if [ "$y" -ge $(( rows - 1 )) ]; then
+    # footer: inert in wide mode; on the phone the DEFAULT footer row carries
+    # tap targets (arrays are empty whenever another footer variant rendered)
+    if [ "$y" = "$rows" ]; then
+      for i in "${!foot_lo[@]}"; do
+        if [ "$x" -ge "${foot_lo[i]}" ] && [ "$x" -le "${foot_hi[i]}" ]; then
+          case "${foot_verb[i]}" in
+            search)  CONFIRM=0; search_enter ;;
+            sort)    CONFIRM=0; cycle_sort ;;
+            newsess) CONFIRM=0; do_newsession ;;
+            help)    CONFIRM=0; help_enter ;;
+          esac
+          return
+        fi
+      done
+    fi
+    return
+  fi
   # the selected entry's control chips are directly tappable (arm + run; a tap
   # on close arms the red `close?` confirm, a second tap runs it)
   if [ "$FOCUS" = body ] && [ "$y" = "$selrow_scr" ] && [ "${#chip_lo[@]}" -gt 0 ]; then
@@ -1307,6 +1467,23 @@ press() {
   fi
   idx=$(( offset + y - 3 ))
   if [ "$idx" -ge 0 ] && [ "$idx" -lt "$total" ]; then
+    if [ "$PHONE" = 1 ]; then
+      # two-tap (phone): the first tap SELECTS the entry under the finger (the
+      # action bar retargets); a second tap on the already-selected entry opens
+      # it. Kills accidental jumps while thumb-scrolling.
+      for (( p=0; p<nwin; p++ )); do
+        if [ "$idx" -ge "${whead[p]}" ] && \
+           [ "$idx" -le $(( p + 1 < nwin ? whead[p+1] - 1 : total - 1 )) ]; then
+          if [ "$p" = "$sel" ] && [ "$FOCUS" = body ]; then
+            jump_win "${line_win[$idx]}" "${line_sess[$idx]:-$VSESS}"
+          else
+            FOCUS=body; CONFIRM=0; ACTION=0; sel=$p; move_sel 0
+          fi
+          return
+        fi
+      done
+      return
+    fi
     jump_win "${line_win[$idx]}" "${line_sess[$idx]:-$VSESS}"
   fi
 }
@@ -1380,9 +1557,20 @@ refresh_size() {
 }
 [ -z "$JW_DASH_TEST" ] && [ -z "$JW_DASH_MEASURE" ] && trap 'refresh_size' WINCH
 
+# ── input debug logger (2026-07-19) ──────────────────────────────────────────
+# `touch ~/.config/tmux-jw/dashboard-debug` (or JW_DASH_DEBUG=1) → every raw
+# key byte / CSI sequence / mouse event appends to /tmp/tmux-jw-dash-debug.log,
+# for discovering what a terminal actually sends (e.g. does a Moshi horizontal
+# swipe emit wheel-left/right, SGR btn 66/67?). Delete the flag file to stop.
+DBGF=""
+{ [ -n "$JW_DASH_DEBUG" ] || [ -e "$HOME/.config/tmux-jw/dashboard-debug" ]; } && DBGF=/tmp/tmux-jw-dash-debug.log
+dbg() { [ -n "$DBGF" ] || return 0; printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >> "$DBGF"; }
+dbg "── open cols=$cols rows=$rows phone=${PHONE:-0} term=$TERM"
+
 while :; do
   draw
   IFS= read -rsn1 key < "$TTY_IN" || break
+  dbg "key $(printf '%q' "$key")"
   # inline text entry (rename / slot) swallows ALL keys until it commits/cancels
   if [ -n "$INPUT_MODE" ]; then handle_input_key "$key"; continue; fi
   TOAST=""                          # a pending action toast lives exactly one keypress
@@ -1423,9 +1611,13 @@ while :; do
         IFS= read -rsn1 -t 1 cb < "$TTY_IN"; IFS= read -rsn1 -t 1 cx < "$TTY_IN"; IFS= read -rsn1 -t 1 cy < "$TTY_IN"
         printf -v b '%d' "'$cb"; printf -v x '%d' "'$cx"; printf -v y '%d' "'$cy"
         btn=$(( (b - 32) & 3 ))
+        dbg "x10 b=$b btn=$btn x=$(( x - 32 )) y=$(( y - 32 ))"
         case "$(( (b - 32) & 64 ))" in
           64) if [ "$HELP_ON" = 1 ]; then [ "$btn" = 0 ] && help_scroll -3 || help_scroll 3
-              else [ "$btn" = 0 ] && scroll -3 || scroll 3; fi; continue ;;
+              else case "$btn" in
+                     0) scroll -3 ;; 1) scroll 3 ;;
+                     2) view_session -1 ;; 3) view_session 1 ;;   # horizontal wheel ←/→
+                   esac; fi; continue ;;
         esac
         [ "$HELP_ON" = 1 ] && { [ "$btn" = 0 ] && help_press "$(( y - 32 ))" "$(( x - 32 ))"; continue; }
         [ "$btn" = 0 ] && press "$(( y - 32 ))" "$(( x - 32 ))"
@@ -1434,6 +1626,7 @@ while :; do
         seq=""
         while IFS= read -rsn1 -t 1 c < "$TTY_IN"; do case "$c" in M|m) break ;; *) seq="$seq$c" ;; esac; done
         btn=${seq%%;*}; rest=${seq#*;}; mx=${rest%%;*}; my=${rest##*;}
+        dbg "sgr btn=$btn x=$mx y=$my ${c}"
         if [ "$HELP_ON" = 1 ]; then      # in help: wheel scrolls, a tap runs/dismisses
           case "$btn" in
             64) help_scroll -3 ;; 65) help_scroll 3 ;;
@@ -1443,6 +1636,8 @@ while :; do
         case "$btn" in
           64) scroll -3; continue ;;
           65) scroll  3; continue ;;
+          66) view_session -1; continue ;;   # horizontal wheel ← → prev session
+          67) view_session  1; continue ;;   # horizontal wheel → → next session
           0)  [ "$c" = "M" ] && press "$my" "$mx"; continue ;;
           *)  continue ;;
         esac ;;
@@ -1451,6 +1646,7 @@ while :; do
              # the final letter, then map.
         seq="$b3"
         while IFS= read -rsn1 -t 1 cc < "$TTY_IN"; do seq="$seq$cc"; case "$cc" in [A-Za-z~]) break ;; esac; done
+        dbg "csi $seq"
         case "$seq" in
           13u|10u|13\;*u|10\;*u) k_enter ;;   # CSI-u Enter → run armed action
           *A) k_up ;;
