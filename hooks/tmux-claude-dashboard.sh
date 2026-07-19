@@ -1365,13 +1365,29 @@ input_cancel() {
 # append, backspace deletes, Enter commits, Esc cancels; arrow/CSI sequences are
 # swallowed (no-ops) so a stray arrow can't corrupt the buffer.
 handle_input_key() {
-  local key=$1 b2 b3 cc
+  local key=$1 b2 cc seqi j1 j2 j3
   case "$key" in
     $'\x1b')
-      IFS= read -rsn1 -t 0.4 b2 < "$TTY_IN"
-      if [ "$b2" = "[" ]; then                    # a CSI seq → swallow, ignore
-        IFS= read -rsn1 -t 0.4 b3 < "$TTY_IN"
-        case "$b3" in [0-9]) while IFS= read -rsn1 -t 0.4 cc < "$TTY_IN"; do case "$cc" in [A-Za-z~]) break;; esac; done;; esac
+      # NB: integer -t only — bash 3.2 (the live /bin/bash) rejects fractional
+      # timeouts with an ERROR, so `-t 0.4` returned instantly and the rest of
+      # the escape sequence leaked into the main loop, where a mouse event's
+      # payload digits (`0;30;22M`) fired the digit-jump path and CLOSED the
+      # popup. Same leak on newer bash: the old swallow only drained `[0-9]…`
+      # sequences, never SGR mouse (`<…M`). Swallow EVERY CSI to its final byte.
+      IFS= read -rsn1 -t 1 b2 < "$TTY_IN" || b2=""
+      if [ "$b2" = "[" ]; then
+        seqi=""
+        while IFS= read -rsn1 -t 1 cc < "$TTY_IN"; do
+          case "$cc" in [A-Za-z~]) break ;; *) seqi="$seqi$cc" ;; esac
+        done
+        # legacy X10 mouse (\e[M + 3 raw payload bytes) → drain the payload
+        if [ "$cc" = M ] && [ -z "$seqi" ]; then
+          IFS= read -rsn1 -t 1 j1 < "$TTY_IN"; IFS= read -rsn1 -t 1 j2 < "$TTY_IN"; IFS= read -rsn1 -t 1 j3 < "$TTY_IN"
+          input_cancel; return
+        fi
+        # a tap (SGR press) while typing = CANCEL the input — touch users have
+        # no reachable Esc; wheel/release/arrows are swallowed silently
+        case "${seqi}${cc}" in '<0;'*M) input_cancel ;; esac
         return
       fi
       input_cancel ;;                             # bare Esc → cancel

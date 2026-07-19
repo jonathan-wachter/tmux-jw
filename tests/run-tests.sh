@@ -830,9 +830,12 @@ echo "── 21. PHONE mode: narrow-client touch layout ────────
 "$TMUXB" -L "$SOCK" set-option -w -t cc-ph1:1 @ccrecap "a recap line for the phone tests"
 "$TMUXB" -L "$SOCK" new-session -d -s cc-ph2 -n ph-solo -x 200 -y 50
 "$TMUXB" -L "$SOCK" set-option -w -t cc-ph2:1 @ccstate idle
+# /bin/bash on purpose: the live popup's shebang = macOS bash 3.2, and a
+# 3.2-only bug (fractional read -t) once crashed the popup while PATH-bash
+# tests stayed green. Phone tests run on the real interpreter.
 phone() { printf "$2" | JW_DASH_TEST=1 JW_DASH_COLS=64 JW_DASH_ROWS=24 \
   JW_TMUX="$TMUXB -L $SOCK" TMPDIR="$WORK" JW_DASH_PARKING=cc-parked \
-  bash hooks/tmux-claude-dashboard.sh "$1" 1 2>>"$WORK/dash.err"; }
+  /bin/bash hooks/tmux-claude-dashboard.sh "$1" 1 2>>"$WORK/dash.err"; }
 f=$(phone cc-ph1 'q' | last_frame)
 check "phone spacer: row 1 blank"            '[ -z "$(printf "%s\n" "$f" | sed -n 1p | tr -d "[:space:]")" ]'
 check "phone header on row 2: [ ➕ ]"        'printf "%s\n" "$f" | sed -n 2p | grep -q "\[ ➕ \]"'
@@ -864,6 +867,28 @@ check "phone wheel-right → other session"    '[ "$h1" != "$h2" ]'
 fw=$(dash cc-ph1 1 'q' | last_frame)
 check "wide mode keeps divider chips"        'printf "%s\n" "$fw" | grep -q "❯ open ❮"'
 check "wide mode keeps [ ➕ NEW ]"           'printf "%s\n" "$fw" | grep -q "➕ NEW"'
+# every action-bar button, by tap (abar row = 22 at 24 rows); columns located
+# from the rendered frame so layout changes can't silently break the taps
+bcol() { phone cc-ph1 'q' | last_frame | grep "\[ $1 \]" | head -1 | awk -v L="[ $1 ]" '{print index($0, L) + 2}'; }
+mc=$(bcol move); rc=$(bcol ren); cc_=$(bcol close); nc=$(bcol new)
+f=$(phone cc-ph1 "\033[<0;${mc};22Mq" | last_frame)
+check "abar [ move ] tap → slot prompt"      'printf "%s\n" "$f" | grep -q "move window 1 to slot:"'
+f=$(phone cc-ph1 "\033[<0;${rc};22Mq" | last_frame)
+check "abar [ ren ] tap → rename prompt"     'printf "%s\n" "$f" | grep -q "rename to: ph-one"'
+f=$(phone cc-ph1 "\033[<0;${cc_};22Mq" | last_frame)
+check "abar [ close ] tap 1 → confirm"       'printf "%s\n" "$f" | grep -q "again = gracefully close window 1"'
+# REGRESSION (2026-07-19): a tap while the slot/rename input is open used to
+# leak its CSI payload into the main loop (and error on bash 3.2's integer-only
+# read -t) — stray digits fired the jump path and CLOSED the popup. Now the
+# tap cancels the input; no jump, footer back to the default targets.
+out=$(phone cc-ph1 "\033[<0;${mc};22M\033[<0;5;6M q")
+check "tap during input: no stray jump"      '! printf "%s" "$out" | grep -aq "ACTION open"'
+check "tap during input: input cancelled"    'printf "%s" "$out" | last_frame | grep -q "\[ search \]"'
+check "tap during input: no read errors"     '! grep -q "invalid timeout" "$WORK/dash.err"'
+# [ new ] LAST — it really moves the window into a fresh session (park engine)
+out=$(phone cc-ph1 "\033[<0;${nc};22M")
+check "abar [ new ] tap → new session"       'printf "%s" "$out" | grep -aq "ACTION new cc-ph1:1"'
+"$TMUXB" -L "$SOCK" kill-session -t ph-one 2>/dev/null
 "$TMUXB" -L "$SOCK" kill-session -t cc-ph1 2>/dev/null
 "$TMUXB" -L "$SOCK" kill-session -t cc-ph2 2>/dev/null
 
