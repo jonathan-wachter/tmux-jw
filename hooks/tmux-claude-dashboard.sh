@@ -215,13 +215,15 @@ apply_dims() {
   # the header sheds to icon + one tab + < > arrows, the footer legend becomes
   # tap targets, and taps select-then-open (two-tap). Gate is width-only (a
   # narrow desktop split benefits too); JW_DASH_PHONE=0/1 forces it (tests).
-  PHONE=0; [ "$cols" -lt 72 ] && PHONE=1
+  PHONE=0; [ "$cols" -lt 90 ] && PHONE=1   # <90 catches the iPhone BOTH ways (64 keyboard-up, ~85 full-screen)
   [ -n "$JW_DASH_PHONE" ] && PHONE=$JW_DASH_PHONE
   if [ "$cols" -lt 90 ]; then ind=" ";  hang=3; wrap=$(( cols - 4 ))
   else                        ind="  "; hang=4; wrap=$(( cols - 6 )); fi
   [ "$wrap" -lt 20 ] && wrap=20
   RULE=$(printf '─%.0s' $(seq 1 "$cols"))
-  view_h=$(( rows - 4 - PHONE )); [ "$view_h" -lt 3 ] && view_h=3   # phone: 1 row → action bar
+  # phone: 1 row → action bar, 1 row → blank TOP SPACER (row 1) that pushes the
+  # header's tap targets down, clear of Moshi's own chrome at the screen edge
+  view_h=$(( rows - 4 - PHONE * 2 )); [ "$view_h" -lt 3 ] && view_h=3
 }
 apply_dims
 
@@ -682,7 +684,7 @@ draw_entry_rule() {
   # the SELECTED row's title is reverse-video highlighted (marks the cursor row);
   # the • active marker stays plain, like the chip brackets.
   styled="${mk}${REV}${BOLD}${title}${RESET} ${SEPC}${fill}${RESET}"
-  chip_lo=(); chip_hi=(); selrow_scr=$(( 3 + j - offset ))
+  chip_lo=(); chip_hi=(); selrow_scr=$(( 3 + PHONE + j - offset ))
   col=$(( tw + fillw + 2 ))                       # 1-based column of the first chip
   for i in "${!labels[@]}"; do
     lbl=${labels[i]}; a=${aidx[i]}                 # a = LOGICAL action index
@@ -751,6 +753,7 @@ draw() {
   if [ "$HELP_ON" = 1 ]; then draw_help; return; fi
   {
     printf '\033[H\033[2J'
+    [ "$PHONE" = 1 ] && printf '\n'    # phone: blank spacer row 1 (see apply_dims)
     chip_lo=(); chip_hi=(); selrow_scr=0
     # V3 (2026-07-08): rebuild the header EVERY frame so focus transitions (↑ to
     # the tab bar, ↓/⏎ back to the list) restyle the viewed tab immediately.
@@ -817,7 +820,7 @@ draw() {
     printf '%s%s%s' "$MUTED" "$foot" "$RESET"
     # tappable close button, top-right corner ([ ❌ ] = 6 cells on the phone,
     # [ ❌ CLOSE ] = 12 wide); then park the cursor at the bottom
-    if [ "$PHONE" = 1 ]; then printf '\033[1;%dH%s[ ❌ ]%s\033[%d;1H' $(( cols - 6 )) "$BOLD" "$RESET" "$rows"
+    if [ "$PHONE" = 1 ]; then printf '\033[2;%dH%s[ ❌ ]%s\033[%d;1H' $(( cols - 6 )) "$BOLD" "$RESET" "$rows"   # row 2: header sits under the spacer
     else printf '\033[1;%dH%s[ ❌ CLOSE ]%s\033[%d;1H' $(( cols - 12 )) "$BOLD" "$RESET" "$rows"; fi
   } > "$TTY_OUT"
 }
@@ -1405,7 +1408,11 @@ cycle_sort() {
 press() {
   local y=$1 x=$2 i idx cw p
   [ "$y" -ge 1 ] 2>/dev/null || return
-  if [ "$y" -le 1 ]; then
+  # phone: row 1 is the blank top spacer — DELIBERATELY inert (it exists to
+  # keep header taps clear of Moshi's own chrome at the screen edge), and the
+  # header lives on row 2
+  if [ "$PHONE" = 1 ] && [ "$y" -le 1 ]; then return; fi
+  if [ "$y" -le $(( 1 + PHONE )) ]; then
     cw=12; [ "$PHONE" = 1 ] && cw=6
     [ "$x" -ge $(( cols - cw )) ] 2>/dev/null && exit 0           # [ ❌ CLOSE ] / [ ❌ ]
     if [ "$x" -ge "$new_lo" ] 2>/dev/null && [ "$x" -le "$new_hi" ]; then
@@ -1465,7 +1472,7 @@ press() {
       fi
     done
   fi
-  idx=$(( offset + y - 3 ))
+  idx=$(( offset + y - 3 - PHONE ))    # phone: body starts a row lower (spacer)
   if [ "$idx" -ge 0 ] && [ "$idx" -lt "$total" ]; then
     if [ "$PHONE" = 1 ]; then
       # two-tap (phone): the first tap SELECTS the entry under the finger (the

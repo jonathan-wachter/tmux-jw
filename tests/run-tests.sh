@@ -834,20 +834,21 @@ phone() { printf "$2" | JW_DASH_TEST=1 JW_DASH_COLS=64 JW_DASH_ROWS=24 \
   JW_TMUX="$TMUXB -L $SOCK" TMPDIR="$WORK" JW_DASH_PARKING=cc-parked \
   bash hooks/tmux-claude-dashboard.sh "$1" 1 2>>"$WORK/dash.err"; }
 f=$(phone cc-ph1 'q' | last_frame)
-check "phone header: icon-only [ ➕ ]"       'printf "%s\n" "$f" | head -1 | grep -q "\[ ➕ \]"'
+check "phone spacer: row 1 blank"            '[ -z "$(printf "%s\n" "$f" | sed -n 1p | tr -d "[:space:]")" ]'
+check "phone header on row 2: [ ➕ ]"        'printf "%s\n" "$f" | sed -n 2p | grep -q "\[ ➕ \]"'
 check "phone header: no [ ➕ NEW ]"          '! printf "%s\n" "$f" | grep -q "➕ NEW"'
-check "phone header: < name > arrows"        'printf "%s\n" "$f" | head -1 | grep -q "< *cc-ph1 *>"'
+check "phone header: < name > arrows"        'printf "%s\n" "$f" | sed -n 2p | grep -q "< *cc-ph1 *>"'
 check "phone divider: no inline chips"       '! printf "%s\n" "$f" | grep -q "❯ open ❮"'
 check "phone action bar: open + close"       'printf "%s\n" "$f" | grep -q "\[ open \].*\[ close \]"'
 check "phone footer: tap targets"            'printf "%s\n" "$f" | grep -q "\[ search \].*\[ + session \]"'
 fr=$(phone cc-ph1 'q' | last_frame_raw)
 check "phone selected title = REV cursor"    '[[ "$fr" == *"${REV_SEQ}${BOLD_SEQ}"*"ph-one"* ]]'
-# two-tap: window 2's header row (win1 header row3 + 1 recap line → row 5);
+# two-tap: window 2's header row (spacer row1 · win1 header row4 + 1 recap → row 6);
 # first tap only SELECTS (no ACTION open), the second tap on the same row opens
-out=$(phone cc-ph1 '\033[<0;5;5Mq')
+out=$(phone cc-ph1 '\033[<0;5;6Mq')
 check "phone tap 1: selects, no open"        '! printf "%s" "$out" | grep -aq "ACTION open"'
 check "phone tap 1: cursor moved to ph-two"  '[[ "$(printf "%s" "$out" | last_frame_raw)" == *"${REV_SEQ}${BOLD_SEQ}"*"ph-two"* ]]'
-out=$(phone cc-ph1 '\033[<0;5;5M\033[<0;5;5M')
+out=$(phone cc-ph1 '\033[<0;5;6M\033[<0;5;6M')
 check "phone tap 2: same row opens"          'printf "%s" "$out" | grep -aq "ACTION open cc-ph1:2"'
 # action bar: ↑-arm walk skips hidden session-move indices (open→new→move…),
 # and a tap on the bar's [ open ] span opens the selected window
@@ -856,8 +857,8 @@ check "phone ←/→ walk: 2×→ arms [ move ]"    '[[ "$fr" == *"${REV_SEQ}${B
 ocol=$(phone cc-ph1 'q' | last_frame | grep -n "\[ open \]" | head -1 | awk -F: '{print index($2 ":" $3, "[ open ]")}')
 check "phone abar tap on [ open ] opens"     'printf "%s" "$(phone cc-ph1 "\033[<0;$(( ocol + 2 ));22M")" | grep -aq "ACTION open cc-ph1:1"'
 # horizontal wheel (SGR btn 67) → next session; header line 1 changes
-h1=$(phone cc-ph1 'q' | last_frame | head -1)
-h2=$(phone cc-ph1 '\033[<67;5;10Mq' | last_frame | head -1)
+h1=$(phone cc-ph1 'q' | last_frame | sed -n 2p)
+h2=$(phone cc-ph1 '\033[<67;5;10Mq' | last_frame | sed -n 2p)
 check "phone wheel-right → other session"    '[ "$h1" != "$h2" ]'
 # wide mode untouched: same session at 110 cols still renders inline chips
 fw=$(dash cc-ph1 1 'q' | last_frame)
