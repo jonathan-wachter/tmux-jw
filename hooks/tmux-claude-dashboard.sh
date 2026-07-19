@@ -491,29 +491,54 @@ SHADE=$'\033[48;2;181;188;200m'
 # purpose: ‹›❯❮ are ambiguous-width (2 cells in iOS terminals — the header-clip
 # bug), so phone chrome avoids them; tap columns must be exact.
 build_header_phone() {
-  local sv nst tst name cnt="" maxn col styled
+  local sv nst tst name cnt="" maxn col styled i lab need
+  local budget=$(( cols - 8 ))    # keep the [ ❌ ] zone clear
   sview; sv=$__sv
   nst="$BOLD"; [ "$FOCUS" = tabs ] && [ "$BARNEW" = 1 ] && nst="${TABFOC}${BOLD}"
   styled="${SHADE} ${nst}[ ➕ ]${RESET}${SHADE} ${RESET}${SLATE}│${RESET}${SHADE} "
   new_lo=2; new_hi=7              # "[ ➕ ]" = 6 cells (➕ is 2), cols 2-7
   hdr_bound0=9
   col=11                          # first cell after "│ "
+  # ALL-TABS mode (2026-07-19): when every session fits as its own [ name ]
+  # chip, render them ALL as direct finger-sized tap targets — one tap
+  # switches, no cycling. The leftover header width IS the tap padding.
+  need=0
+  for (( i=0; i<nsess; i++ )); do need=$(( need + ${#SESS_LIST[i]} + 6 )); done
+  need=$(( need - 2 ))            # last chip has no 2-cell gap
+  if [ $(( col + need )) -le "$budget" ]; then
+    for (( i=0; i<nsess; i++ )); do
+      lab="[ ${SESS_LIST[i]} ]"
+      if [ "$i" = "$sv" ]; then
+        if [ "$FOCUS" = tabs ] && [ "$BARNEW" = 0 ]; then tst="${TABFOC}${BOLD}"
+        else                                              tst="${REV}${BOLD}"; fi
+      else                                                tst="$BOLD"; fi
+      tab_lo+=("$col"); tab_hi+=($(( col + ${#lab} - 1 ))); tab_of+=("$i")
+      styled="${styled}${tst}${lab}${RESET}${SHADE}"
+      col=$(( col + ${#lab} ))
+      [ $(( i + 1 )) -lt "$nsess" ] && { styled="${styled}  "; col=$(( col + 2 )); }
+    done
+    styled="${styled} ${RESET}${SLATE}│${RESET}"
+    hdr_bound=$(( col + 1 ))
+    hdr_out=$styled
+    return
+  fi
+  # overflow fallback: chunky [ < ] name [ > ] cycle buttons + i/n count
   [ "$nsess" -gt 1 ] && cnt="$(( sv + 1 ))/${nsess}"
   name=${SESS_LIST[sv]}
-  maxn=$(( cols - 8 - col - ${#cnt} - 8 ))   # room minus [ ❌ ] zone, arrows, pads
+  maxn=$(( budget - col - ${#cnt} - 15 ))   # 2×"[ < ]"(5) + pads
   [ "$maxn" -lt 4 ] && maxn=4
   [ ${#name} -gt "$maxn" ] && name="${name:0:$(( maxn - 1 ))}…"
   if [ "$FOCUS" = tabs ] && [ "$BARNEW" = 0 ]; then tst="${TABFOC}${BOLD}"
   else                                              tst="${REV}${BOLD}"; fi
-  tab_lo=("$col");           tab_hi=("$col");                       tab_of=(-1)   # <  prev
-  styled="${styled}${BOLD}<${RESET}${SHADE} "
-  col=$(( col + 2 ))
+  tab_lo=("$col");           tab_hi=($(( col + 4 )));               tab_of=(-1)   # [ < ] prev
+  styled="${styled}${BOLD}[ < ]${RESET}${SHADE} "
+  col=$(( col + 6 ))
   tab_lo+=("$col");          tab_hi+=($(( col + ${#name} + 1 )));   tab_of+=(-3)  # name → list
   styled="${styled}${tst} ${name} ${RESET}${SHADE} "
   col=$(( col + ${#name} + 3 ))
-  tab_lo+=("$col");          tab_hi+=("$col");                      tab_of+=(-2)  # >  next
-  styled="${styled}${BOLD}>${RESET}${SHADE}"
-  col=$(( col + 1 ))
+  tab_lo+=("$col");          tab_hi+=($(( col + 4 )));              tab_of+=(-2)  # [ > ] next
+  styled="${styled}${BOLD}[ > ]${RESET}${SHADE}"
+  col=$(( col + 5 ))
   [ -n "$cnt" ] && { styled="${styled} ${MUTED}${cnt}${RESET}${SHADE}"; col=$(( col + ${#cnt} + 1 )); }
   styled="${styled} ${RESET}${SLATE}│${RESET}"
   hdr_bound=$(( col + 1 ))

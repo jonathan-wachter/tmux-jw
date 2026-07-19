@@ -845,7 +845,11 @@ f=$(phone cc-ph1 'q' | last_frame)
 check "phone spacer: row 1 blank"            '[ -z "$(printf "%s\n" "$f" | sed -n 1p | tr -d "[:space:]")" ]'
 check "phone header on row 2: [ ➕ ]"        'printf "%s\n" "$f" | sed -n 2p | grep -q "\[ ➕ \]"'
 check "phone header: no [ ➕ NEW ]"          '! printf "%s\n" "$f" | grep -q "➕ NEW"'
-check "phone header: < name > arrows"        'printf "%s\n" "$f" | sed -n 2p | grep -q "< *cc-ph1 *>"'
+check "phone header: all-tabs tap targets"   'printf "%s\n" "$f" | sed -n 2p | grep -q "\[ cc-ph1 \]  \[ cc-ph2 \]"'
+f2=$(phone cc-ph1 '\033[<0;30;2Mq' | last_frame)
+check "tap [ cc-ph2 ] tab → session viewed"  'printf "%s\n" "$f2" | grep -q "1) ph-solo"'
+f3=$(printf 'q' | JW_DASH_TEST=1 JW_DASH_COLS=40 JW_DASH_ROWS=24 JW_TMUX="$TMUXB -L $SOCK" TMPDIR="$WORK" JW_DASH_PARKING=cc-parked /bin/bash hooks/tmux-claude-dashboard.sh cc-ph1 1 2>>"$WORK/dash.err" | last_frame)
+check "narrow overflow → [ < ] [ > ] arrows" 'printf "%s\n" "$f3" | sed -n 2p | grep -q "\[ < \].*\[ > \]"'
 check "phone divider: no inline chips"       '! printf "%s\n" "$f" | grep -q "❯ open ❮"'
 check "phone action bar: open + close"       'printf "%s\n" "$f" | grep -q "\[ open \].*\[ close \]"'
 check "phone footer: tap targets"            'printf "%s\n" "$f" | grep -q "\[ search \].*\[ + session \]"'
@@ -865,9 +869,8 @@ check "phone ←/→ walk: 2×→ arms [ move ]"    '[[ "$fr" == *"${REV_SEQ}${B
 ocol=$(phone cc-ph1 'q' | last_frame | grep -n "\[ open \]" | head -1 | awk -F: '{print index($2 ":" $3, "[ open ]")}')
 check "phone abar tap on [ open ] opens"     'printf "%s" "$(phone cc-ph1 "\033[<0;$(( ocol + 2 ));22M")" | grep -aq "ACTION open cc-ph1:1"'
 # horizontal wheel (SGR btn 67) → next session; header line 1 changes
-h1=$(phone cc-ph1 'q' | last_frame | sed -n 2p)
-h2=$(phone cc-ph1 '\033[<67;5;10Mq' | last_frame | sed -n 2p)
-check "phone wheel-right → other session"    '[ "$h1" != "$h2" ]'
+hw=$(phone cc-ph1 '\033[<67;5;10Mq' | last_frame)
+check "phone wheel-right → other session"    'printf "%s\n" "$hw" | grep -q "1) ph-solo"'
 # wide mode untouched: same session at 110 cols still renders inline chips
 fw=$(dash cc-ph1 1 'q' | last_frame)
 check "wide mode keeps divider chips"        'printf "%s\n" "$fw" | grep -q "❯ open ❮"'
@@ -881,7 +884,7 @@ f=$(phone cc-ph1 "\033[<0;${mc};22Mq" | last_frame)
 check "[ move ] tap → destination picker"    'printf "%s\n" "$f" | grep -q "\[ cc-ph2 \].*\[ slot # \].*\[ x \]"'
 check "picker footer prompt"                 'printf "%s\n" "$f" | grep -q "where? tap a destination"'
 scol=$(printf "%s\n" "$f" | grep "\[ slot # \]" | head -1 | awk '{print index($0, "[ slot # ]") + 2}')
-tcol=$(printf "%s\n" "$f" | grep "\[ cc-ph2 \]" | head -1 | awk '{print index($0, "[ cc-ph2 ]") + 2}')
+tcol=$(printf "%s\n" "$f" | sed -n 22p | awk '{print index($0, "[ cc-ph2 ]") + 2}')
 f=$(phone cc-ph1 "\033[<0;${mc};22M\033[<0;${scol};22Mq" | last_frame)
 check "picker [ slot # ] → slot prompt"      'printf "%s\n" "$f" | grep -q "move window 1 to slot:"'
 out=$(phone cc-ph1 "\033[<0;${mc};22M\033[<0;5;6M q")
